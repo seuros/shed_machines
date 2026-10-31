@@ -17,11 +17,6 @@ pub enum Verdict {
 
 /// Sheds by how long work waited rather than by how much of it there is.
 ///
-/// Queue length is the wrong signal, because a fast queue can be long and a
-/// stalled queue can be short. `CoDel` watches the time work spends waiting and
-/// starts shedding only once that stays above target for a full interval, so a
-/// burst passes through untouched and a standing queue does not.
-///
 /// ```
 /// use shed_machines::{Codel, Verdict};
 ///
@@ -77,7 +72,7 @@ impl Codel {
     }
 
     /// Successive sheds come faster, as the inverse square root of how many
-    /// have happened, so the control law converges instead of oscillating.
+    /// have happened.
     const fn shed_gap_ns(&self) -> u64 {
         let count = if self.shed_count == 0 {
             1

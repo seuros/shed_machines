@@ -3,21 +3,13 @@
 /// Each [`Budget::decay`] halves both counts.
 const DECAY_DIVISOR: u64 = 2;
 
-/// Added to the denominator so a client with no history sheds nothing instead
-/// of dividing by zero. From the formula in Google's SRE book.
+/// Denominator bias from the formula in Google's SRE book.
 const DENOMINATOR_BIAS: f64 = 1.0;
 
 /// Requests each accepted one entitles the client to, from Google's SRE book.
 pub const DEFAULT_MULTIPLIER: f64 = 2.0;
 
 /// Reports how much outbound work to drop before it leaves the process.
-///
-/// A client that keeps retrying a failing dependency multiplies the load that
-/// broke it. This tracks what the client asked for against what was accepted,
-/// and holds the next wave back in proportion.
-///
-/// The caller owns the dice: [`Budget::shed_probability`] is a fraction, not a
-/// decision, so the core needs no random number generator.
 ///
 /// ```
 /// use shed_machines::Budget;
@@ -64,8 +56,7 @@ impl Budget {
         self.accepts = self.accepts.saturating_add(1);
     }
 
-    /// Drop both counts to a fraction of themselves, so the budget forgets an
-    /// outage instead of holding it against the dependency forever.
+    /// Halve both counts.
     pub const fn decay(&mut self) {
         self.requests /= DECAY_DIVISOR;
         self.accepts /= DECAY_DIVISOR;

@@ -11,8 +11,7 @@ pub const DEFAULT_ALPHA: u32 = 3;
 /// hold band is wide enough that a single slow call does not trigger a cut.
 pub const DEFAULT_BETA: u32 = 6;
 
-/// Denominator of the fraction kept after an overload. Halving, because an
-/// overload says the estimate was wrong rather than slightly high.
+/// Denominator of the fraction kept after an overload.
 pub const OVERLOAD_DIVISOR: u32 = 2;
 
 /// Calls added or removed per sample.
@@ -21,9 +20,6 @@ const STEP: u32 = 1;
 /// Estimates how many calls are queued rather than working, from the gap
 /// between the current round-trip time and the best one ever seen, then steers
 /// the limit to keep that estimate inside a band.
-///
-/// Latency alone cannot distinguish a slow dependency from a deep queue. The
-/// ratio can.
 ///
 /// ```
 /// use shed_machines::{Bounds, Controller, Sample, Vegas};
@@ -79,9 +75,6 @@ impl Vegas {
 
     /// `limit * (rtt - best) / rtt`, the Vegas estimate of how many calls in
     /// flight are waiting rather than working.
-    ///
-    /// `excess` never exceeds `rtt_ns`, so the quotient never exceeds the
-    /// limit, and nothing here can overflow or need narrowing.
     fn queued(&self, rtt_ns: u64) -> u64 {
         if rtt_ns == 0 || self.best_rtt_ns >= rtt_ns {
             return 0;
