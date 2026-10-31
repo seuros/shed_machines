@@ -14,9 +14,9 @@ use crate::{observe, opening};
 struct Wrapper(RefCell<Aimd>);
 
 impl Wrapper {
-    fn new(args: &[Value]) -> Result<Self, Error> {
+    fn new(ruby: &Ruby, args: &[Value]) -> Result<Self, Error> {
         let args = scan_args::<(), (), (), (), RHash, ()>(args)?;
-        let (bounds, limit, [kept, of]) = opening(args.keywords, ["kept", "of"])?;
+        let (bounds, limit, [kept, of]) = opening(ruby, args.keywords, ["kept", "of"])?;
         let control = Aimd::new(bounds, limit).backoff(
             kept.unwrap_or(DEFAULT_BACKOFF_KEPT),
             of.unwrap_or(DEFAULT_BACKOFF_OF),

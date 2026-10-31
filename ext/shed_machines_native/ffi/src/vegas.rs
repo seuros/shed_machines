@@ -14,9 +14,9 @@ use crate::{observe, opening, to_seconds};
 struct Wrapper(RefCell<Vegas>);
 
 impl Wrapper {
-    fn new(args: &[Value]) -> Result<Self, Error> {
+    fn new(ruby: &Ruby, args: &[Value]) -> Result<Self, Error> {
         let args = scan_args::<(), (), (), (), RHash, ()>(args)?;
-        let (bounds, limit, [alpha, beta]) = opening(args.keywords, ["alpha", "beta"])?;
+        let (bounds, limit, [alpha, beta]) = opening(ruby, args.keywords, ["alpha", "beta"])?;
         let control = Vegas::new(bounds, limit)
             .band(alpha.unwrap_or(DEFAULT_ALPHA), beta.unwrap_or(DEFAULT_BETA));
         Ok(Self(RefCell::new(control)))

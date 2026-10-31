@@ -7,7 +7,7 @@ use magnus::{Error, RHash, RModule, Ruby, Symbol, Value, function, method, prelu
 use shed_machines::Codel;
 use shed_machines::codel::{DEFAULT_INTERVAL_NS, DEFAULT_TARGET_NS};
 
-use crate::{to_ns, to_seconds, verdict};
+use crate::{duration, to_ns, to_seconds, verdict};
 
 #[magnus::wrap(class = "ShedMachines::Codel", free_immediately, size)]
 struct Wrapper(RefCell<Codel>);
@@ -34,7 +34,9 @@ impl Wrapper {
         let args = scan_args::<(), (), (), (), RHash, ()>(args)?;
         let (sojourn, now) =
             get_kwargs::<_, (f64, f64), (), ()>(args.keywords, &["sojourn", "now"], &[])?.required;
-        let answer = rb_self.0.borrow_mut().admit(to_ns(sojourn), to_ns(now));
+        let sojourn_ns = duration(ruby, "sojourn", sojourn)?;
+        let now_ns = duration(ruby, "now", now)?;
+        let answer = rb_self.0.borrow_mut().admit(sojourn_ns, now_ns);
         Ok(verdict(ruby, answer))
     }
 

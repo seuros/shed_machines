@@ -30,9 +30,21 @@ pub(crate) fn to_seconds(nanoseconds: u64) -> f64 {
     nanoseconds as f64 / f64::from(NS_PER_SECOND)
 }
 
+/// Seconds as nanoseconds, rejecting a negative or non-finite duration.
+pub(crate) fn duration(ruby: &Ruby, name: &str, seconds: f64) -> Result<u64, Error> {
+    if !seconds.is_finite() || seconds < 0.0 {
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!("{name} must be finite and not negative, got {seconds}"),
+        ));
+    }
+    Ok(to_ns(seconds))
+}
+
 /// The keywords every controller is opened with: a starting `limit:`, the
 /// `min:` and `max:` it moves within, and the two values it tunes itself with.
 pub(crate) fn opening(
+    ruby: &Ruby,
     keywords: RHash,
     tuning: [&str; 2],
 ) -> Result<(Bounds, u32, [Option<u32>; 2]), Error> {
@@ -43,8 +55,17 @@ pub(crate) fn opening(
     )?;
     let (limit,) = keywords.required;
     let (min, max, first, second) = keywords.optional;
-    let bounds = Bounds::new(min.unwrap_or(LOWEST_FLOOR), max.unwrap_or(DEFAULT_CEILING));
-    Ok((bounds, limit, [first, second]))
+    let floor = min.unwrap_or(LOWEST_FLOOR);
+    let ceiling = max.unwrap_or(DEFAULT_CEILING);
+    if floor < LOWEST_FLOOR || ceiling < floor {
+        return Err(Error::new(
+            ruby.exception_arg_error(),
+            format!(
+                "min must be at least {LOWEST_FLOOR} and max at least min, got {floor}..{ceiling}"
+            ),
+        ));
+    }
+    Ok((Bounds::new(floor, ceiling), limit, [first, second]))
 }
 
 /// Folds one completed call, given as `rtt:` in seconds, `in_flight:` and
@@ -62,7 +83,7 @@ pub(crate) fn observe<C: Controller>(
     )?
     .required;
     let sample = Sample {
-        rtt_ns: to_ns(rtt),
+        rtt_ns: duration(ruby, "rtt", rtt)?,
         in_flight,
         outcome: self::outcome(ruby, outcome)?,
     };
