@@ -14,7 +14,7 @@ mod vegas;
 use std::cell::RefCell;
 
 use magnus::scan_args::{get_kwargs, scan_args};
-use magnus::{Error, RHash, Ruby, Symbol, Value, prelude::*};
+use magnus::{Error, Integer, RHash, Ruby, Symbol, TryConvert, Value, prelude::*};
 use shed_machines::{Bounds, Controller, DEFAULT_CEILING, LOWEST_FLOOR, Outcome, Sample, Verdict};
 
 /// Nanoseconds in a second.
@@ -28,6 +28,37 @@ pub(crate) fn to_ns(seconds: f64) -> u64 {
 #[expect(clippy::cast_precision_loss)]
 pub(crate) fn to_seconds(nanoseconds: u64) -> f64 {
     nanoseconds as f64 / f64::from(NS_PER_SECOND)
+}
+
+/// A whole number of things: a limit, a bound, a call count, a ratio's two
+/// sides.
+///
+/// magnus reads an integer through Ruby's `NUM2*` family, which truncates a
+/// `Float` towards zero instead of refusing it, so an argument that counts
+/// rather than measures is read as one of these and anything but an `Integer`
+/// is turned away. An `Integer` outside the target width still comes back as
+/// the `RangeError` magnus raises for it. Seconds stay [`duration`]'s.
+pub(crate) struct Whole<T>(pub(crate) T);
+
+impl<T: TryConvert> TryConvert for Whole<T> {
+    fn try_convert(value: Value) -> Result<Self, Error> {
+        if Integer::from_value(value).is_none() {
+            return Err(not_whole(value));
+        }
+        T::try_convert(value).map(Self)
+    }
+}
+
+fn not_whole(value: Value) -> Error {
+    let ruby = Ruby::get_with(value);
+    Error::new(
+        ruby.exception_type_error(),
+        format!(
+            "no implicit conversion of {} into Integer: {}",
+            value.class(),
+            value.inspect()
+        ),
+    )
 }
 
 /// Seconds as nanoseconds, rejecting a negative or non-finite duration.
@@ -48,15 +79,21 @@ pub(crate) fn opening(
     keywords: RHash,
     tuning: [&str; 2],
 ) -> Result<(Bounds, u32, [Option<u32>; 2]), Error> {
-    let keywords = get_kwargs::<_, (u32,), (Option<u32>, Option<u32>, Option<u32>, Option<u32>), ()>(
-        keywords,
-        &["limit"],
-        &["min", "max", tuning[0], tuning[1]],
-    )?;
-    let (limit,) = keywords.required;
+    let keywords = get_kwargs::<
+        _,
+        (Whole<u32>,),
+        (
+            Option<Whole<u32>>,
+            Option<Whole<u32>>,
+            Option<Whole<u32>>,
+            Option<Whole<u32>>,
+        ),
+        (),
+    >(keywords, &["limit"], &["min", "max", tuning[0], tuning[1]])?;
+    let (Whole(limit),) = keywords.required;
     let (min, max, first, second) = keywords.optional;
-    let floor = min.unwrap_or(LOWEST_FLOOR);
-    let ceiling = max.unwrap_or(DEFAULT_CEILING);
+    let floor = min.map_or(LOWEST_FLOOR, |Whole(min)| min);
+    let ceiling = max.map_or(DEFAULT_CEILING, |Whole(max)| max);
     if floor < LOWEST_FLOOR || ceiling < floor {
         return Err(Error::new(
             ruby.exception_arg_error(),
@@ -65,7 +102,8 @@ pub(crate) fn opening(
             ),
         ));
     }
-    Ok((Bounds::new(floor, ceiling), limit, [first, second]))
+    let tuning = [first, second].map(|given| given.map(|Whole(value)| value));
+    Ok((Bounds::new(floor, ceiling), limit, tuning))
 }
 
 /// Folds one completed call, given as `rtt:` in seconds, `in_flight:` and
@@ -76,7 +114,7 @@ pub(crate) fn observe<C: Controller>(
     args: &[Value],
 ) -> Result<(), Error> {
     let args = scan_args::<(), (), (), (), RHash, ()>(args)?;
-    let (rtt, in_flight, outcome) = get_kwargs::<_, (f64, u32, Value), (), ()>(
+    let (rtt, Whole(in_flight), outcome) = get_kwargs::<_, (f64, Whole<u32>, Value), (), ()>(
         args.keywords,
         &["rtt", "in_flight", "outcome"],
         &[],
