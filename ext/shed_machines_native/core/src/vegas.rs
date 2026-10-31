@@ -80,7 +80,8 @@ impl Vegas {
             return 0;
         }
         let excess = rtt_ns - self.best_rtt_ns;
-        u64::from(self.limit).saturating_mul(excess) / rtt_ns
+        let scaled = u128::from(self.limit) * u128::from(excess) / u128::from(rtt_ns);
+        u64::try_from(scaled).unwrap_or(u64::MAX)
     }
 }
 

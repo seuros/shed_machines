@@ -57,12 +57,22 @@ impl Aimd {
     }
 }
 
+impl Aimd {
+    /// A zero denominator keeps the limit rather than dividing by zero, and the
+    /// product is widened so a representable quotient is not lost to saturation.
+    fn kept_limit(&self) -> u32 {
+        if self.of == 0 {
+            return self.limit;
+        }
+        let scaled = u64::from(self.limit) * u64::from(self.kept) / u64::from(self.of);
+        u32::try_from(scaled).unwrap_or(u32::MAX)
+    }
+}
+
 impl Controller for Aimd {
     fn observe(&mut self, sample: Sample) {
         self.limit = match sample.outcome {
-            Outcome::Overload => self
-                .bounds
-                .clamp(self.limit.saturating_mul(self.kept) / self.of),
+            Outcome::Overload => self.bounds.clamp(self.kept_limit()),
             Outcome::Ok if sample.in_flight >= self.limit => {
                 self.bounds.clamp(self.limit.saturating_add(INCREASE))
             }
