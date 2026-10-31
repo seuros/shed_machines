@@ -1,0 +1,131 @@
+# Adaptive concurrency limits and load shedding. Every class here is defined by
+# the native extension, which binds the `shed-machines` crate.
+#
+# Nothing here enforces anything: these are the control loops, and the caller
+# owns the semaphore, the queue and the dice.
+module ShedMachines
+  VERSION: String
+
+  # Nanoseconds in a second. Durations cross this boundary as seconds and move
+  # through the control laws as nanoseconds.
+  NS_PER_SECOND: Integer
+
+  # A limit of zero would wedge the caller shut, so one is the lowest floor that
+  # still makes progress.
+  LOWEST_FLOOR: Integer
+
+  # Arbitrary, and deliberately so: there is no principled default ceiling for
+  # an unknown dependency. Set it from what the pool behind it can take.
+  DEFAULT_CEILING: Integer
+
+  # How a completed call ended, from the limiter's point of view. `:overload`
+  # means it timed out, was rejected, or otherwise says the dependency is
+  # loaded. Anything else raises `ArgumentError`.
+  type outcome = :ok | :overload
+
+  # What to do with a piece of work that has been waiting.
+  type verdict = :admit | :shed
+
+  # Additive increase, multiplicative decrease: grows the limit by one whenever
+  # a saturated call succeeds, and keeps `kept / of` of it on any overload.
+  class Aimd
+    DEFAULT_BACKOFF_KEPT: Integer
+    DEFAULT_BACKOFF_OF: Integer
+
+    # `limit` outside `min..max` is pulled inside it.
+    def self.new: (
+      limit: Integer,
+      ?min: Integer,
+      ?max: Integer,
+      ?kept: Integer,
+      ?of: Integer
+    ) -> instance
+
+    # Folds one completed call into the limit. `rtt` is in seconds, `in_flight`
+    # counts the calls in flight when this one started, including itself.
+    def observe: (rtt: Float, in_flight: Integer, outcome: outcome) -> self
+
+    # Calls allowed in flight right now.
+    def limit: () -> Integer
+
+    def inspect: () -> String
+  end
+
+  # TCP Vegas applied to a concurrency limit: estimates how many calls are
+  # queued rather than working from the gap between the current round-trip time
+  # and the best one seen, then steers the limit to keep that estimate between
+  # `alpha` and `beta`.
+  class Vegas
+    DEFAULT_ALPHA: Integer
+    DEFAULT_BETA: Integer
+    OVERLOAD_DIVISOR: Integer
+
+    def self.new: (
+      limit: Integer,
+      ?min: Integer,
+      ?max: Integer,
+      ?alpha: Integer,
+      ?beta: Integer
+    ) -> instance
+
+    def observe: (rtt: Float, in_flight: Integer, outcome: outcome) -> self
+
+    def limit: () -> Integer
+
+    # The best round-trip time seen so far in seconds, the stand-in for zero
+    # queueing. `nil` until the first completed call.
+    def best_rtt: () -> Float?
+
+    def inspect: () -> String
+  end
+
+  # Controlled delay: sheds by how long work waited rather than by how much of
+  # it there is, and only once the wait stays above target for a full interval.
+  class Codel
+    DEFAULT_TARGET_NS: Integer
+    DEFAULT_INTERVAL_NS: Integer
+
+    # Both in seconds, defaulting to the values the CoDel paper settled on.
+    def self.new: (?target: Float, ?interval: Float) -> instance
+
+    # `sojourn` is how long this work waited before being considered, `now` is
+    # the current time, both in seconds.
+    def admit: (sojourn: Float, now: Float) -> verdict
+
+    # The acceptable waiting time, in seconds.
+    def target: () -> Float
+    def interval: () -> Float
+
+    def shedding?: () -> bool
+
+    def inspect: () -> String
+  end
+
+  # Client-side adaptive throttling, so retries cannot amplify an outage.
+  class Budget
+    DEFAULT_MULTIPLIER: Float
+
+    # `multiplier` is how many requests each accepted one entitles the client
+    # to.
+    def self.new: (?multiplier: Float) -> instance
+
+    def requested: () -> self
+
+    def accepted: () -> self
+
+    # Halves both counts, so the budget forgets an outage instead of holding it
+    # against the dependency forever.
+    def decay: () -> self
+
+    def multiplier: () -> Float
+    def requests: () -> Integer
+
+    def accepts: () -> Integer
+
+    # The fraction of outbound work to drop locally, in `0.0..1.0`. A fraction
+    # rather than a decision: the caller owns the dice.
+    def shed_probability: () -> Float
+
+    def inspect: () -> String
+  end
+end

@@ -67,6 +67,11 @@ impl Codel {
     }
 
     #[must_use]
+    pub const fn interval_ns(&self) -> u64 {
+        self.interval_ns
+    }
+
+    #[must_use]
     pub const fn shedding(&self) -> bool {
         self.shedding
     }

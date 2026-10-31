@@ -72,6 +72,11 @@ impl Budget {
     }
 
     #[must_use]
+    pub const fn multiplier(&self) -> f64 {
+        self.multiplier
+    }
+
+    #[must_use]
     pub const fn requests(&self) -> u64 {
         self.requests
     }

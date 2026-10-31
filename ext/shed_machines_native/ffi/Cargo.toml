@@ -1,0 +1,19 @@
+[package]
+name = "shed_machines_native"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors = ["Abdelkader Boudih <oss@seuros.com>"]
+license = "MIT"
+description = "Ruby bindings for the shed-machines control laws"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+shed-machines = { workspace = true, features = ["std"] }
+magnus = "0.9"
