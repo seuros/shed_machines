@@ -3,6 +3,10 @@
 /// Each [`Budget::decay`] halves both counts.
 const DECAY_DIVISOR: u64 = 2;
 
+/// Added to the denominator so a client with no history sheds nothing instead
+/// of dividing by zero. From the formula in Google's SRE book.
+const DENOMINATOR_BIAS: f64 = 1.0;
+
 /// Requests each accepted one entitles the client to, from Google's SRE book.
 pub const DEFAULT_MULTIPLIER: f64 = 2.0;
 
@@ -87,7 +91,7 @@ impl Budget {
         if excess <= 0.0 {
             return 0.0;
         }
-        excess / (f64::from(requests) + 1.0)
+        excess / (f64::from(requests) + DENOMINATOR_BIAS)
     }
 }
 
