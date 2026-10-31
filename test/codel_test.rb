@@ -55,6 +55,13 @@ module ShedMachines
       assert_equal :shed, queue.admit(sojourn: 0.02, now: 0.5)
     end
 
+    def test_a_configured_duration_the_arithmetic_cannot_hold_is_rejected
+      [-1.0, Float::NAN, Float::INFINITY].each do |bad|
+        assert_raises(ArgumentError) { Codel.new(target: bad) }
+        assert_raises(ArgumentError) { Codel.new(interval: bad) }
+      end
+    end
+
     def test_a_sojourn_the_arithmetic_cannot_hold_is_rejected
       assert_raises(ArgumentError) { Codel.new.admit(sojourn: -1.0, now: 0.0) }
       assert_raises(ArgumentError) { Codel.new.admit(sojourn: 0.0, now: Float::INFINITY) }

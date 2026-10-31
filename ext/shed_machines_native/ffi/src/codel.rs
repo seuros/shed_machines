@@ -7,13 +7,13 @@ use magnus::{Error, RHash, RModule, Ruby, Symbol, Value, function, method, prelu
 use shed_machines::Codel;
 use shed_machines::codel::{DEFAULT_INTERVAL_NS, DEFAULT_TARGET_NS};
 
-use crate::{duration, to_ns, to_seconds, verdict};
+use crate::{duration, to_seconds, verdict};
 
 #[magnus::wrap(class = "ShedMachines::Codel", free_immediately, size)]
 struct Wrapper(RefCell<Codel>);
 
 impl Wrapper {
-    fn new(args: &[Value]) -> Result<Self, Error> {
+    fn new(ruby: &Ruby, args: &[Value]) -> Result<Self, Error> {
         let args = scan_args::<(), (), (), (), RHash, ()>(args)?;
         let (target, interval) = get_kwargs::<_, (), (Option<f64>, Option<f64>), ()>(
             args.keywords,
@@ -22,8 +22,12 @@ impl Wrapper {
         )?
         .optional;
         let queue = Codel::new(
-            target.map_or(DEFAULT_TARGET_NS, to_ns),
-            interval.map_or(DEFAULT_INTERVAL_NS, to_ns),
+            target.map_or(Ok(DEFAULT_TARGET_NS), |seconds| {
+                duration(ruby, "target", seconds)
+            })?,
+            interval.map_or(Ok(DEFAULT_INTERVAL_NS), |seconds| {
+                duration(ruby, "interval", seconds)
+            })?,
         );
         Ok(Self(RefCell::new(queue)))
     }
