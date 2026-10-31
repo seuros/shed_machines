@@ -10,7 +10,6 @@ repository = "https://github.com/seuros/shed_machines"
 keywords = ["load-shedding", "concurrency", "codel", "backpressure", "no-std"]
 categories = ["no-std", "concurrency"]
 readme = "README.md"
-exclude = ["src/**/tests.rs"]
 
 [lib]
 name = "shed_machines"
