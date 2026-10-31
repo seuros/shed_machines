@@ -68,5 +68,15 @@ module ShedMachines
     def test_a_starting_limit_is_required
       assert_raises(ArgumentError) { Aimd.new(min: 1, max: 100) }
     end
+
+    def test_a_round_trip_the_arithmetic_cannot_hold_is_rejected
+      assert_raises(ArgumentError) { control.observe(rtt: -1.0, in_flight: 10, outcome: :ok) }
+      assert_raises(ArgumentError) { control.observe(rtt: Float::NAN, in_flight: 10, outcome: :ok) }
+    end
+
+    def test_bounds_that_hold_no_limit_are_rejected
+      assert_raises(ArgumentError) { Aimd.new(limit: 10, min: 0) }
+      assert_raises(ArgumentError) { Aimd.new(limit: 10, min: 100, max: 10) }
+    end
   end
 end

@@ -55,6 +55,11 @@ module ShedMachines
       assert_equal :shed, queue.admit(sojourn: 0.02, now: 0.5)
     end
 
+    def test_a_sojourn_the_arithmetic_cannot_hold_is_rejected
+      assert_raises(ArgumentError) { Codel.new.admit(sojourn: -1.0, now: 0.0) }
+      assert_raises(ArgumentError) { Codel.new.admit(sojourn: 0.0, now: Float::INFINITY) }
+    end
+
     private
 
     # Above target since zero and shedding since the interval elapsed.
