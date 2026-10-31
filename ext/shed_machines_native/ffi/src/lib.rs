@@ -61,11 +61,12 @@ pub(crate) fn observe<C: Controller>(
         &[],
     )?
     .required;
-    control.borrow_mut().observe(Sample {
+    let sample = Sample {
         rtt_ns: to_ns(rtt),
         in_flight,
         outcome: self::outcome(ruby, outcome)?,
-    });
+    };
+    control.borrow_mut().observe(sample);
     Ok(())
 }
 
