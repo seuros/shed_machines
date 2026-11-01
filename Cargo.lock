@@ -247,6 +247,7 @@ name = "shed_machines_native"
 version = "0.1.2"
 dependencies = [
  "magnus",
+ "rb-sys",
  "shed-machines",
 ]
 
