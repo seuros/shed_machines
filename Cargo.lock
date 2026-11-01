@@ -240,11 +240,11 @@ checksum = "1bc711410fbe7399f390ca1c3b60ad0f53f80e95c5eb935e52268a0e2cd49acc"
 
 [[package]]
 name = "shed-machines"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "shed_machines_native"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "magnus",
  "shed-machines",
