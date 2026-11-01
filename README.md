@@ -70,13 +70,30 @@ control.limit                                                   # => 8
 ```
 
 `Vegas` infers queue depth from the gap between the current round-trip time and
-the best one it has seen, because latency alone cannot tell a slow dependency
-from a deep queue. It grows while fewer than `alpha` calls look queued, shrinks
-above `beta`, and holds in between.
+the smallest one it has seen recently, because latency alone cannot tell a slow
+dependency from a deep queue. It grows while fewer than `alpha` calls look
+queued, shrinks above `beta`, and holds in between.
 
 ```ruby
 control = ShedMachines::Vegas.new(limit: 10, min: 1, max: 200, alpha: 3, beta: 6)
 control.best_rtt     # => nil, until the first completed call
+```
+
+That inference only holds when any two calls would take about as long on an idle
+dependency. Over a mix whose service times differ by orders of magnitude the
+baseline settles on the fastest kind of work, every slower call reads as a deep
+queue, and the limit sinks to `min` and stays there — tuning `alpha` and `beta`
+cannot fix it, because the signal is measuring the wrong thing. Use `Aimd` for
+heterogeneous work, since it steers on outcomes rather than latency, or give
+each class of work its own `Vegas`.
+
+The baseline is the smallest round-trip time in the current window of
+`DEFAULT_BASELINE_WINDOW` samples or the one before it, so one unusually fast
+call cannot pin it for the life of the process and a dependency that
+legitimately slows down is believed within two windows.
+
+```ruby
+control = ShedMachines::Vegas.new(limit: 10).baseline_window(250)
 ```
 
 Both take `outcome: :ok` or `outcome: :overload`, where overload means the call
@@ -152,6 +169,7 @@ The Ruby constants mirror the crate's, with the same names and values.
 | `Vegas::DEFAULT_ALPHA`             | 3           |
 | `Vegas::DEFAULT_BETA`              | 6           |
 | `Vegas::OVERLOAD_DIVISOR`          | 2           |
+| `Vegas::DEFAULT_BASELINE_WINDOW`   | 1000        |
 | `Codel::DEFAULT_TARGET_NS`         | 5_000_000   |
 | `Codel::DEFAULT_INTERVAL_NS`       | 100_000_000 |
 | `Budget::DEFAULT_MULTIPLIER`       | 2.0         |
