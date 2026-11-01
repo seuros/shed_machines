@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.3](https://github.com/seuros/shed_machines/compare/shed_machines/v0.1.2...shed_machines/v0.1.3) (2026-11-01)
+
+
+### Bug Fixes
+
+* enable the rb-sys compiled fallback so new Rubies can build ([a5adf0a](https://github.com/seuros/shed_machines/commit/a5adf0a30c5db907c5b7c92b03f1d9e0b9c2fcf3))
+
 ## [0.1.2](https://github.com/seuros/shed_machines/compare/shed_machines/v0.1.1...shed_machines/v0.1.2) (2026-11-01)
 
 
