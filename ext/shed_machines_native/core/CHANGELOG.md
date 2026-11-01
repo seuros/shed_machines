@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/seuros/shed_machines/compare/shed-machines-v0.2.0...shed-machines-v0.2.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* window the Vegas baseline so it cannot pin to one lucky call ([9cea8fa](https://github.com/seuros/shed_machines/commit/9cea8fa82f1fd9ab99f0bcf7a67a36ee24cd61ec))
+
 ## [0.2.0](https://github.com/seuros/shed_machines/compare/shed-machines-v0.1.0...shed-machines-v0.2.0) (2026-11-01)
 
 

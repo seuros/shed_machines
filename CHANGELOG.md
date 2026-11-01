@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2](https://github.com/seuros/shed_machines/compare/shed_machines/v0.1.1...shed_machines/v0.1.2) (2026-11-01)
+
+
+### Bug Fixes
+
+* a republished platform gem is skipped, not fatal ([35352a1](https://github.com/seuros/shed_machines/commit/35352a16dd73e19cf7e7661ce362f96e016a2cac))
+* window the Vegas baseline so it cannot pin to one lucky call ([9cea8fa](https://github.com/seuros/shed_machines/commit/9cea8fa82f1fd9ab99f0bcf7a67a36ee24cd61ec))
+
 ## [0.1.1](https://github.com/seuros/shed_machines/compare/shed_machines-v0.1.0...shed_machines/v0.1.1) (2026-11-01)
 
 
