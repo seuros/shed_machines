@@ -23,10 +23,19 @@ control.observe(Sample::ok(40_000_000, 11));
 assert!(control.limit() < 11);
 ```
 
-`Vegas` infers queue depth from the gap between current and best-ever latency,
-because latency alone cannot tell a slow dependency from a deep queue. `Aimd` is
-the simpler choice when there is no usable latency signal: it grows by one per
-saturated success and cuts by `DEFAULT_BACKOFF` on overload.
+`Vegas` infers queue depth from the gap between current latency and the smallest
+seen in the last window or two, because latency alone cannot tell a slow
+dependency from a deep queue. `Aimd` is the simpler choice when there is no
+usable latency signal: it grows by one per saturated success and cuts by
+`DEFAULT_BACKOFF` on overload.
+
+`Vegas` needs homogeneous work. Over a mix whose service times differ by orders
+of magnitude the baseline settles on the fastest kind, every slower call reads
+as a deep queue, and the limit sinks to the floor and stays there; no `alpha`
+and `beta` fix that, because the signal is measuring the wrong thing. Use `Aimd`
+there, or one `Vegas` per class of work. The baseline itself is windowed over
+`DEFAULT_BASELINE_WINDOW` samples, so one lucky call cannot pin it for the life
+of the process — see `Vegas::baseline_window`.
 
 ## Shedding by waiting time
 
