@@ -5,10 +5,12 @@ use std::cell::RefCell;
 use magnus::scan_args::scan_args;
 use magnus::typed_data::Obj;
 use magnus::{Error, RHash, RModule, Ruby, Value, function, method, prelude::*};
-use shed_machines::vegas::{DEFAULT_ALPHA, DEFAULT_BETA, OVERLOAD_DIVISOR};
+use shed_machines::vegas::{
+    DEFAULT_ALPHA, DEFAULT_BASELINE_WINDOW, DEFAULT_BETA, OVERLOAD_DIVISOR,
+};
 use shed_machines::{Controller, Vegas};
 
-use crate::{observe, opening, to_seconds};
+use crate::{Whole, observe, opening, to_seconds};
 
 #[magnus::wrap(class = "ShedMachines::Vegas", free_immediately, size)]
 struct Wrapper(RefCell<Vegas>);
@@ -31,7 +33,14 @@ impl Wrapper {
         self.0.borrow().limit()
     }
 
-    /// The best round-trip time seen so far, in seconds.
+    /// Samples one baseline window spans. Chainable, like the Rust builder.
+    fn baseline_window(rb_self: Obj<Self>, Whole(samples): Whole<u32>) -> Obj<Self> {
+        let windowed = rb_self.0.borrow().baseline_window(samples);
+        *rb_self.0.borrow_mut() = windowed;
+        rb_self
+    }
+
+    /// The smallest round-trip time in the last window or two, in seconds.
     fn best_rtt(&self) -> Option<f64> {
         self.0.borrow().best_rtt_ns().map(to_seconds)
     }
@@ -52,9 +61,11 @@ pub fn define(ruby: &Ruby, module: RModule) -> Result<(), Error> {
     class.const_set("DEFAULT_ALPHA", DEFAULT_ALPHA)?;
     class.const_set("DEFAULT_BETA", DEFAULT_BETA)?;
     class.const_set("OVERLOAD_DIVISOR", OVERLOAD_DIVISOR)?;
+    class.const_set("DEFAULT_BASELINE_WINDOW", DEFAULT_BASELINE_WINDOW)?;
     class.define_singleton_method("new", function!(Wrapper::new, -1))?;
     class.define_method("observe", method!(Wrapper::observe, -1))?;
     class.define_method("limit", method!(Wrapper::limit, 0))?;
+    class.define_method("baseline_window", method!(Wrapper::baseline_window, 1))?;
     class.define_method("best_rtt", method!(Wrapper::best_rtt, 0))?;
     class.define_method("inspect", method!(Wrapper::inspect, 0))?;
     Ok(())
