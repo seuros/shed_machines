@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/seuros/shed_machines/compare/shed_machines/v0.1.3...shed_machines/v0.1.4) (2026-11-06)
+
+
+### Bug Fixes
+
+* keep test modules out of the packaged crate ([254cff8](https://github.com/seuros/shed_machines/commit/254cff86e3614d68be67cd1f3b1370cdcaffe096))
+
 ## [0.1.3](https://github.com/seuros/shed_machines/compare/shed_machines/v0.1.2...shed_machines/v0.1.3) (2026-11-01)
 
 
