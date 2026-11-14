@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/seuros/shed_machines/compare/shed_machines/v0.4.0...shed_machines/v0.4.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** require matryona-machines &gt;= 0.4 ([f8035e7](https://github.com/seuros/shed_machines/commit/f8035e7578edc37d6de25111632b05d2c7d29da6))
+
 ## [0.4.0](https://github.com/seuros/shed_machines/compare/shed_machines/v0.3.0...shed_machines/v0.4.0) (2026-11-14)
 
 
