@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/shed_machines/compare/shed_machines/v0.3.0...shed_machines/v0.4.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* read Budget multipliers natively with matryona 0.3 finite
+
+### Features
+
+* read Budget multipliers natively with matryona 0.3 finite ([e973d9d](https://github.com/seuros/shed_machines/commit/e973d9d6a2614e57c284ffdfe13e7d8d2444b3b3))
+
 ## [0.3.0](https://github.com/seuros/shed_machines/compare/shed_machines/v0.2.0...shed_machines/v0.3.0) (2026-11-14)
 
 
