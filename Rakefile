@@ -55,7 +55,12 @@ end
 
 desc 'Run the Rust core crate tests'
 task :cargo do
-  sh 'cargo', 'test', '--manifest-path', 'ext/shed_machines_native/core/Cargo.toml', '--all-features'
+  sh 'cargo', 'test', '--manifest-path', 'ext/shed_machines_native/core/Cargo.toml'
+end
+
+desc 'Validate the RBS signatures'
+task :rbs do
+  sh 'rbs', '-I', 'sig', 'validate'
 end
 
 desc 'Lint the binding crate'
@@ -65,6 +70,6 @@ task :clippy do
 end
 
 task test: :compile
-task default: %i[test cargo]
+task default: %i[test cargo rbs]
 
 Dir[File.join(__dir__, 'tasks/*.rake')].sort.each { |f| load f }

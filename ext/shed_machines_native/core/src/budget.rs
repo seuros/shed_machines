@@ -1,5 +1,7 @@
 //! Client-side adaptive throttling, so retries cannot amplify an outage.
 
+use crate::Refusal;
+
 /// Each [`Budget::decay`] halves both counts.
 const DECAY_DIVISOR: u64 = 2;
 
@@ -9,25 +11,30 @@ const DENOMINATOR_BIAS: f64 = 1.0;
 /// Requests each accepted one entitles the client to, from Google's SRE book.
 pub const DEFAULT_MULTIPLIER: f64 = 2.0;
 
+/// The smallest multiplier that makes sense: below it a client whose every
+/// request is accepted would still be told to shed.
+pub const LOWEST_MULTIPLIER: f64 = 1.0;
+
 /// Reports how much outbound work to drop before it leaves the process.
 ///
 /// ```
 /// use shed_machines::Budget;
 ///
-/// let mut budget = Budget::new(2.0);
+/// let mut budget = Budget::new(2.0).ok_or("multiplier")?;
 ///
 /// // Everything is being accepted, so nothing is held back.
 /// for _ in 0..100 {
-///     budget.requested();
-///     budget.accepted();
+///     budget.requested()?;
+///     budget.accepted()?;
 /// }
 /// assert_eq!(budget.shed_probability(), 0.0);
 ///
 /// // The dependency stops accepting and the client keeps asking.
 /// for _ in 0..300 {
-///     budget.requested();
+///     budget.requested()?;
 /// }
 /// assert!(budget.shed_probability() > 0.0);
+/// # Ok::<(), Box<dyn core::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Budget {
@@ -38,40 +45,66 @@ pub struct Budget {
 
 impl Budget {
     /// `multiplier` is how many requests each accepted one entitles the client
-    /// to. See [`DEFAULT_MULTIPLIER`].
+    /// to. `None` unless it is finite and at least [`LOWEST_MULTIPLIER`]. See
+    /// [`DEFAULT_MULTIPLIER`].
     #[must_use]
-    pub const fn new(multiplier: f64) -> Self {
-        Self {
-            requests: 0,
-            accepts: 0,
-            multiplier,
+    pub const fn new(multiplier: f64) -> Option<Self> {
+        Self::restored(multiplier, 0, 0)
+    }
+
+    /// A budget carrying saved counts: the constructor for a restart. `None`
+    /// for a multiplier [`new`](Self::new) would reject. The counts are the
+    /// caller's own and any pair is valid: a decay can leave more accepts than
+    /// requests.
+    #[must_use]
+    pub const fn restored(multiplier: f64, requests: u64, accepts: u64) -> Option<Self> {
+        if !multiplier.is_finite() || multiplier < LOWEST_MULTIPLIER {
+            return None;
         }
+        Some(Self {
+            requests,
+            accepts,
+            multiplier,
+        })
     }
 
-    pub const fn requested(&mut self) {
-        self.requests = self.requests.saturating_add(1);
+    /// Count one request sent.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::Overflow`] when the count is at its maximum.
+    pub const fn requested(&mut self) -> Result<(), Refusal> {
+        count_one(&mut self.requests)
     }
 
-    pub const fn accepted(&mut self) {
-        self.accepts = self.accepts.saturating_add(1);
+    /// Count one request the dependency accepted.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::Overflow`] when the count is at its maximum.
+    pub const fn accepted(&mut self) -> Result<(), Refusal> {
+        count_one(&mut self.accepts)
     }
 
-    /// Halve both counts.
+    /// Halve both counts. Never refuses.
     pub const fn decay(&mut self) {
         self.requests /= DECAY_DIVISOR;
         self.accepts /= DECAY_DIVISOR;
     }
 
+    /// Requests each accepted one entitles the client to.
     #[must_use]
     pub const fn multiplier(&self) -> f64 {
         self.multiplier
     }
 
+    /// Requests counted.
     #[must_use]
     pub const fn requests(&self) -> u64 {
         self.requests
     }
 
+    /// Accepts counted.
     #[must_use]
     pub const fn accepts(&self) -> u64 {
         self.accepts
@@ -91,9 +124,24 @@ impl Budget {
     }
 }
 
+/// One more on `count`, or [`Refusal::Overflow`] with it untouched.
+const fn count_one(count: &mut u64) -> Result<(), Refusal> {
+    match count.checked_add(1) {
+        Some(next) => {
+            *count = next;
+            Ok(())
+        }
+        None => Err(Refusal::Overflow),
+    }
+}
+
 impl Default for Budget {
     fn default() -> Self {
-        Self::new(DEFAULT_MULTIPLIER)
+        Self {
+            requests: 0,
+            accepts: 0,
+            multiplier: DEFAULT_MULTIPLIER,
+        }
     }
 }
 

@@ -1,14 +1,13 @@
-# Adaptive concurrency limits and load shedding. Every class here is defined by
-# the native extension, which binds the `shed-machines` crate.
+# Adaptive concurrency limits and load shedding. The controllers are defined by
+# the native extension, which binds the `shed-machines` crate; the Data values
+# validate through it.
 #
 # Nothing here enforces anything: these are the control loops, and the caller
-# owns the semaphore, the queue and the dice.
+# owns the semaphore, the queue and the dice. Every instant and span is Integer
+# nanoseconds. A wrong type raises TypeError; a value the core rejects raises
+# RangeError. Refusals are Symbols and never raise.
 module ShedMachines
   VERSION: String
-
-  # Nanoseconds in a second. Durations cross this boundary as seconds and move
-  # through the control laws as nanoseconds.
-  NS_PER_SECOND: Integer
 
   # A limit of zero would wedge the caller shut, so one is the lowest floor that
   # still makes progress.
@@ -20,61 +19,125 @@ module ShedMachines
 
   # How a completed call ended, from the limiter's point of view. `:overload`
   # means it timed out, was rejected, or otherwise says the dependency is
-  # loaded. Anything else raises `ArgumentError`.
+  # loaded.
   type outcome = :ok | :overload
 
-  # What to do with a piece of work that has been waiting.
+  # What to do with a piece of work that has been waiting. Both are honoured
+  # answers.
   type verdict = :admit | :shed
 
+  # `Refusal::TimeRegression`: `now` is before the latest instant an honoured
+  # call recorded. Nothing changed.
+  type time_regression = :time_regression
+
+  # `Refusal::Overflow`: the count is at 2**64 - 1. Nothing changed.
+  type overflow = :overflow
+
+  # The core's `Bounds`: 1 <= min <= max, or RangeError.
+  class Bounds < Data
+    attr_reader min: Integer
+    attr_reader max: Integer
+
+    def self.new: (Integer min, Integer max) -> instance
+                | (min: Integer, max: Integer) -> instance
+
+    # LOWEST_FLOOR..DEFAULT_CEILING, the core's `Bounds::default`.
+    def self.default: () -> instance
+
+    def with: (?min: Integer, ?max: Integer) -> instance
+  end
+
+  # The core's `Sample`: one completed call. `rtt` in Integer nanoseconds,
+  # `in_flight` the calls in flight when it started including itself (at least
+  # one, or RangeError).
+  class Sample < Data
+    attr_reader rtt: Integer
+    attr_reader in_flight: Integer
+    attr_reader outcome: outcome
+
+    def self.new: (Integer rtt, Integer in_flight, outcome outcome) -> instance
+                | (rtt: Integer, in_flight: Integer, outcome: outcome) -> instance
+
+    def with: (?rtt: Integer, ?in_flight: Integer, ?outcome: outcome) -> instance
+  end
+
+  # The core's `Backoff`: keep `kept / of` of the limit on overload; kept < of,
+  # or RangeError.
+  class Backoff < Data
+    attr_reader kept: Integer
+    attr_reader of: Integer
+
+    def self.new: (Integer kept, Integer of) -> instance
+                | (kept: Integer, of: Integer) -> instance
+
+    # Three quarters, the core's `Backoff::default`.
+    def self.default: () -> instance
+
+    def with: (?kept: Integer, ?of: Integer) -> instance
+  end
+
+  # The core's `Band`: grow below `alpha` queued calls, shrink above `beta`;
+  # alpha <= beta, or RangeError.
+  class Band < Data
+    attr_reader alpha: Integer
+    attr_reader beta: Integer
+
+    def self.new: (Integer alpha, Integer beta) -> instance
+                | (alpha: Integer, beta: Integer) -> instance
+
+    # DEFAULT_ALPHA..DEFAULT_BETA, the core's `Band::default`.
+    def self.default: () -> instance
+
+    def with: (?alpha: Integer, ?beta: Integer) -> instance
+  end
+
   # Additive increase, multiplicative decrease: grows the limit by one whenever
-  # a saturated call succeeds, and keeps `kept / of` of it on any overload.
+  # a saturated call succeeds, and keeps `backoff` of it on any overload.
   class Aimd
     DEFAULT_BACKOFF_KEPT: Integer
     DEFAULT_BACKOFF_OF: Integer
 
-    # `limit` outside `min..max` is pulled inside it.
-    def self.new: (
-      limit: Integer,
-      ?min: Integer,
-      ?max: Integer,
-      ?kept: Integer,
-      ?of: Integer
-    ) -> instance
+    # RangeError when `limit` is outside `bounds`.
+    def self.new: (Bounds bounds, Integer limit, Backoff backoff) -> instance
 
-    # Folds one completed call into the limit. `rtt` is in seconds, `in_flight`
-    # counts the calls in flight when this one started, including itself.
-    def observe: (rtt: Float, in_flight: Integer, outcome: outcome) -> self
+    # Folds one completed call into the limit. Never refuses.
+    def observe: (Sample sample) -> nil
 
     # Calls allowed in flight right now.
     def limit: () -> Integer
+
+    def bounds: () -> Bounds
+    def backoff: () -> Backoff
 
     def inspect: () -> String
   end
 
   # TCP Vegas applied to a concurrency limit: estimates how many calls are
   # queued rather than working from the gap between the current round-trip time
-  # and the best one seen, then steers the limit to keep that estimate between
-  # `alpha` and `beta`.
+  # and the smallest one in the last baseline window or two, then steers the
+  # limit to keep that estimate inside `band`.
   class Vegas
     DEFAULT_ALPHA: Integer
     DEFAULT_BETA: Integer
     OVERLOAD_DIVISOR: Integer
+    DEFAULT_BASELINE_WINDOW: Integer
 
-    def self.new: (
-      limit: Integer,
-      ?min: Integer,
-      ?max: Integer,
-      ?alpha: Integer,
-      ?beta: Integer
-    ) -> instance
+    # RangeError when `limit` is outside `bounds` or `baseline_window` is zero.
+    def self.new: (Bounds bounds, Integer limit, Band band, Integer baseline_window) -> instance
 
-    def observe: (rtt: Float, in_flight: Integer, outcome: outcome) -> self
+    # Folds one completed call into the limit. Never refuses.
+    def observe: (Sample sample) -> nil
 
     def limit: () -> Integer
+    def bounds: () -> Bounds
+    def band: () -> Band
 
-    # The best round-trip time seen so far in seconds, the stand-in for zero
-    # queueing. `nil` until the first completed call.
-    def best_rtt: () -> Float?
+    # Samples one baseline window spans.
+    def baseline_window: () -> Integer
+
+    # The smallest round-trip time in the last window or two, Integer
+    # nanoseconds. `nil` until a call has completed without overload.
+    def best_rtt: () -> Integer?
 
     def inspect: () -> String
   end
@@ -82,21 +145,29 @@ module ShedMachines
   # Controlled delay: sheds by how long work waited rather than by how much of
   # it there is, and only once the wait stays above target for a full interval.
   class Codel
-    DEFAULT_TARGET_NS: Integer
-    DEFAULT_INTERVAL_NS: Integer
+    # The CoDel paper's values, Integer nanoseconds.
+    DEFAULT_TARGET: Integer
+    DEFAULT_INTERVAL: Integer
 
-    # Both in seconds, defaulting to the values the CoDel paper settled on.
-    def self.new: (?target: Float, ?interval: Float) -> instance
+    # Integer nanoseconds; RangeError when either is zero.
+    def self.new: (Integer target, Integer interval) -> instance
 
-    # `sojourn` is how long this work waited before being considered, `now` is
-    # the current time, both in seconds.
-    def admit: (sojourn: Float, now: Float) -> verdict
+    # DEFAULT_TARGET and DEFAULT_INTERVAL.
+    def self.default: () -> instance
 
-    # The acceptable waiting time, in seconds.
-    def target: () -> Float
-    def interval: () -> Float
+    # `sojourn` is how long this work waited, `now` the current instant, both
+    # Integer nanoseconds. `:shed` is an honoured answer. Work under target
+    # records no instant; every other honoured answer records `now`.
+    def admit: (Integer sojourn, Integer now) -> (verdict | time_regression)
 
+    def target: () -> Integer
+    def interval: () -> Integer
+
+    # Whether the last answer above target was part of a shedding run.
     def shedding?: () -> bool
+
+    # Sheds since the queue last dropped under target.
+    def shed_count: () -> Integer
 
     def inspect: () -> String
   end
@@ -104,22 +175,28 @@ module ShedMachines
   # Client-side adaptive throttling, so retries cannot amplify an outage.
   class Budget
     DEFAULT_MULTIPLIER: Float
+    LOWEST_MULTIPLIER: Float
 
     # `multiplier` is how many requests each accepted one entitles the client
-    # to.
-    def self.new: (?multiplier: Float) -> instance
+    # to; RangeError unless finite and at least LOWEST_MULTIPLIER.
+    def self.new: (Float multiplier) -> instance
 
-    def requested: () -> self
+    # A budget carrying saved counts, for a restart.
+    def self.restored: (Float multiplier, Integer requests, Integer accepts) -> instance
 
-    def accepted: () -> self
+    # DEFAULT_MULTIPLIER, nothing counted.
+    def self.default: () -> instance
+
+    def requested: () -> (:counted | overflow)
+
+    def accepted: () -> (:counted | overflow)
 
     # Halves both counts, so the budget forgets an outage instead of holding it
-    # against the dependency forever.
-    def decay: () -> self
+    # against the dependency forever. Never refuses.
+    def decay: () -> nil
 
     def multiplier: () -> Float
     def requests: () -> Integer
-
     def accepts: () -> Integer
 
     # The fraction of outbound work to drop locally, in `0.0..1.0`. A fraction

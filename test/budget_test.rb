@@ -4,52 +4,56 @@ require 'test_helper'
 
 module ShedMachines
   class BudgetTest < Minitest::Test
-    def test_a_client_with_no_history_sheds_nothing
-      assert_in_delta 0.0, Budget.new.shed_probability, 0.0
-    end
+    MAX = (2**64) - 1
 
-    def test_nothing_is_shed_while_the_client_stays_inside_what_it_earned
-      budget = Budget.new
-      10.times { budget.requested.accepted }
-      10.times { budget.requested }
-
-      assert_equal 20, budget.requests
-      assert_equal 10, budget.accepts
+    def test_retries_past_the_entitlement_are_shed
+      budget = Budget.new(2.0)
+      100.times do
+        assert_equal :counted, budget.requested
+        assert_equal :counted, budget.accepted
+      end
       assert_in_delta 0.0, budget.shed_probability, 0.0
+      300.times { budget.requested }
+
+      assert_in_delta 0.4987, budget.shed_probability, 0.001
+      assert_equal [400, 100], [budget.requests, budget.accepts]
     end
 
-    def test_one_request_past_the_entitlement_starts_shedding
-      budget = Budget.new
-      10.times { budget.requested.accepted }
-      11.times { budget.requested }
+    def test_decay_halves_both_counts
+      budget = Budget.restored(2.0, 7, 5)
 
-      assert_in_delta 1.0 / 22, budget.shed_probability, Float::EPSILON
+      assert_nil budget.decay
+      assert_equal [3, 2], [budget.requests, budget.accepts]
     end
 
-    def test_a_client_talking_to_a_dead_dependency_sheds_nearly_everything
-      budget = Budget.new
-      1_000.times { budget.requested }
+    def test_a_full_count_refuses_one_more_and_changes_nothing
+      budget = Budget.restored(2.0, MAX, MAX - 1)
 
-      assert_operator budget.shed_probability, :>, 0.99
+      assert_equal :overflow, budget.requested
+      assert_equal :counted, budget.accepted
+      assert_equal :overflow, budget.accepted
+      assert_equal [MAX, MAX], [budget.requests, budget.accepts]
     end
 
-    def test_the_multiplier_sets_how_much_each_accepted_request_earns
-      budget = Budget.new(multiplier: 1.0)
-      10.times { budget.requested.accepted }
-      budget.requested
-
-      assert_in_delta 1.0 / 12, budget.shed_probability, Float::EPSILON
+    def test_a_multiplier_the_formula_cannot_hold_is_rejected
+      [Float::NAN, Float::INFINITY, -2.0, 0.0, 0.999].each do |bad|
+        assert_raises(RangeError) { Budget.new(bad) }
+        assert_raises(RangeError) { Budget.restored(bad, 0, 0) }
+      end
+      assert_raises(TypeError) { Budget.new('2.0') }
+      assert_raises(TypeError) { Budget.restored(2.0, 1.5, 0) }
+      assert_raises(RangeError) { Budget.restored(2.0, -1, 0) }
+      assert_in_delta 2.0, Budget::DEFAULT_MULTIPLIER, 0.0
+      assert_in_delta 1.0, Budget::LOWEST_MULTIPLIER, 0.0
+      assert_in_delta 2.0, Budget.default.multiplier, 0.0
     end
 
-    def test_decay_halves_both_counts_and_drops_the_odd_one
-      budget = Budget.new
-      7.times { budget.requested }
-      5.times { budget.accepted }
+    def test_a_frozen_budget_counts_nothing
+      budget = Budget.default.freeze
 
-      budget.decay
-
-      assert_equal 3, budget.requests
-      assert_equal 2, budget.accepts
+      assert_raises(FrozenError) { budget.requested }
+      assert_raises(FrozenError) { budget.decay }
+      assert_equal 0, budget.requests
     end
   end
 end

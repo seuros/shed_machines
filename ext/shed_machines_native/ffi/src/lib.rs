@@ -1,34 +1,26 @@
 //! Ruby bindings for the `shed-machines` control laws.
 //!
-//! Durations cross this boundary as seconds and move through the control laws
-//! as nanoseconds. [`to_ns`] and [`to_seconds`] are the only places either
-//! representation changes.
-
-#![allow(clippy::needless_pass_by_value)]
+//! Instants and spans cross this boundary as Integer nanoseconds and move
+//! through the control laws as `Duration`. Everything that can raise, a type
+//! check, a conversion, a class lookup, runs before a core call; after it the
+//! binding only builds values from what the core answered. No `RefCell`
+//! borrow is held while Ruby code runs: a reader copies the core value out
+//! under a short borrow and only then calls `new`, so a `new` that re-enters
+//! the controller makes an ordinary call instead of an uncatchable `fatal`.
+//! No mutating call answers a Ruby object (only Symbols and `nil`), so each
+//! mutates in place after its frozen check.
 
 mod aimd;
 mod budget;
 mod codel;
+mod values;
 mod vegas;
 
 use std::cell::RefCell;
+use std::time::Duration;
 
-use magnus::scan_args::{get_kwargs, scan_args};
-use magnus::{Error, Integer, RHash, Ruby, Symbol, TryConvert, Value, prelude::*};
-use shed_machines::{Bounds, Controller, DEFAULT_CEILING, LOWEST_FLOOR, Outcome, Sample, Verdict};
-
-/// Nanoseconds in a second.
-pub(crate) const NS_PER_SECOND: u32 = 1_000_000_000;
-
-#[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub(crate) fn to_ns(seconds: f64) -> u64 {
-    (seconds * f64::from(NS_PER_SECOND)).round() as u64
-}
-
-#[expect(clippy::cast_precision_loss)]
-pub(crate) fn to_seconds(nanoseconds: u64) -> f64 {
-    nanoseconds as f64 / f64::from(NS_PER_SECOND)
-}
+use magnus::{Error, Integer, RModule, Ruby, Symbol, TryConvert, Value, prelude::*};
+use shed_machines::{Controller, DEFAULT_CEILING, LOWEST_FLOOR, Refusal, Verdict};
 
 /// A whole number of things: a limit, a bound, a call count, a ratio's two
 /// sides.
@@ -36,124 +28,96 @@ pub(crate) fn to_seconds(nanoseconds: u64) -> f64 {
 /// magnus reads an integer through Ruby's `NUM2*` family, which truncates a
 /// `Float` towards zero instead of refusing it, so an argument that counts
 /// rather than measures is read as one of these and anything but an `Integer`
-/// is turned away. An `Integer` outside the target width still comes back as
-/// the `RangeError` magnus raises for it. Seconds stay [`duration`]'s.
+/// is a `TypeError`. An `Integer` outside the target width is the `RangeError`
+/// magnus raises for it.
 pub(crate) struct Whole<T>(pub(crate) T);
 
 impl<T: TryConvert> TryConvert for Whole<T> {
     fn try_convert(value: Value) -> Result<Self, Error> {
         if Integer::from_value(value).is_none() {
-            return Err(not_whole(value));
+            let ruby = Ruby::get_with(value);
+            return Err(Error::new(
+                ruby.exception_type_error(),
+                format!(
+                    "no implicit conversion of {} into Integer: {}",
+                    value.class(),
+                    value.inspect()
+                ),
+            ));
         }
         T::try_convert(value).map(Self)
     }
 }
 
-fn not_whole(value: Value) -> Error {
-    let ruby = Ruby::get_with(value);
-    Error::new(
-        ruby.exception_type_error(),
-        format!(
-            "no implicit conversion of {} into Integer: {}",
-            value.class(),
-            value.inspect()
-        ),
-    )
-}
+/// An instant or span given as Integer nanoseconds: `TypeError` for anything
+/// but an `Integer`, `RangeError` for a negative one or one past 64 bits.
+pub(crate) struct Nanos(pub(crate) Duration);
 
-/// Seconds as nanoseconds, rejecting a negative or non-finite duration.
-pub(crate) fn duration(ruby: &Ruby, name: &str, seconds: f64) -> Result<u64, Error> {
-    if !seconds.is_finite() || seconds < 0.0 {
-        return Err(Error::new(
-            ruby.exception_arg_error(),
-            format!("{name} must be finite and not negative, got {seconds}"),
-        ));
+impl TryConvert for Nanos {
+    fn try_convert(value: Value) -> Result<Self, Error> {
+        let Whole(nanos) = Whole::<u64>::try_convert(value)?;
+        Ok(Self(Duration::from_nanos(nanos)))
     }
-    Ok(to_ns(seconds))
 }
 
-/// The keywords every controller is opened with: a starting `limit:`, the
-/// `min:` and `max:` it moves within, and the two values it tunes itself with.
-pub(crate) fn opening(
+/// A `Duration` the binding was handed as nanoseconds, back as nanoseconds.
+pub(crate) fn nanos(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// `RangeError` for a value the core's constructor answered `None` to.
+pub(crate) fn rejected(ruby: &Ruby, why: &str) -> Error {
+    Error::new(ruby.exception_range_error(), why.to_owned())
+}
+
+/// The honoured answer's symbol, or the `snake_case` symbol of the refusal.
+pub(crate) fn answer<T>(
     ruby: &Ruby,
-    keywords: RHash,
-    tuning: [&str; 2],
-) -> Result<(Bounds, u32, [Option<u32>; 2]), Error> {
-    let keywords = get_kwargs::<
-        _,
-        (Whole<u32>,),
-        (
-            Option<Whole<u32>>,
-            Option<Whole<u32>>,
-            Option<Whole<u32>>,
-            Option<Whole<u32>>,
-        ),
-        (),
-    >(keywords, &["limit"], &["min", "max", tuning[0], tuning[1]])?;
-    let (Whole(limit),) = keywords.required;
-    let (min, max, first, second) = keywords.optional;
-    let floor = min.map_or(LOWEST_FLOOR, |Whole(min)| min);
-    let ceiling = max.map_or(DEFAULT_CEILING, |Whole(max)| max);
-    if floor < LOWEST_FLOOR || ceiling < floor {
-        return Err(Error::new(
-            ruby.exception_arg_error(),
-            format!(
-                "min must be at least {LOWEST_FLOOR} and max at least min, got {floor}..{ceiling}"
-            ),
-        ));
+    answer: Result<T, Refusal>,
+    honoured: impl FnOnce(T) -> Symbol,
+) -> Value {
+    match answer {
+        Ok(value) => honoured(value),
+        Err(refusal) => ruby.to_symbol(match refusal {
+            Refusal::TimeRegression => "time_regression",
+            Refusal::Overflow => "overflow",
+        }),
     }
-    let tuning = [first, second].map(|given| given.map(|Whole(value)| value));
-    Ok((Bounds::new(floor, ceiling), limit, tuning))
+    .as_value()
 }
 
-/// Folds one completed call, given as `rtt:` in seconds, `in_flight:` and
-/// `outcome:`, into a controller.
+/// Folds a `ShedMachines::Sample` into `control`, converted before the limit
+/// moves. Never refuses: answers `nil`.
 pub(crate) fn observe<C: Controller>(
     ruby: &Ruby,
+    this: Value,
     control: &RefCell<C>,
-    args: &[Value],
+    sample: Value,
 ) -> Result<(), Error> {
-    let args = scan_args::<(), (), (), (), RHash, ()>(args)?;
-    let (rtt, Whole(in_flight), outcome) = get_kwargs::<_, (f64, Whole<u32>, Value), (), ()>(
-        args.keywords,
-        &["rtt", "in_flight", "outcome"],
-        &[],
-    )?
-    .required;
-    let sample = Sample {
-        rtt_ns: duration(ruby, "rtt", rtt)?,
-        in_flight,
-        outcome: self::outcome(ruby, outcome)?,
-    };
+    this.check_frozen()?;
+    let sample = values::sample_from(ruby, sample)?;
     control.borrow_mut().observe(sample);
     Ok(())
 }
 
-fn outcome(ruby: &Ruby, value: Value) -> Result<Outcome, Error> {
-    let name = Symbol::from_value(value).and_then(|symbol| symbol.name().ok());
-    match name.as_deref() {
-        Some("ok") => Ok(Outcome::Ok),
-        Some("overload") => Ok(Outcome::Overload),
-        _ => Err(Error::new(
-            ruby.exception_arg_error(),
-            format!("unknown outcome: {}", value.inspect()),
-        )),
-    }
+pub(crate) fn verdict(ruby: &Ruby, verdict: Verdict) -> Symbol {
+    ruby.to_symbol(match verdict {
+        Verdict::Admit => "admit",
+        Verdict::Shed => "shed",
+    })
 }
 
-pub(crate) fn verdict(ruby: &Ruby, verdict: Verdict) -> Symbol {
-    match verdict {
-        Verdict::Admit => ruby.to_symbol("admit"),
-        Verdict::Shed => ruby.to_symbol("shed"),
-    }
+/// `ShedMachines`, where the `Data` classes live.
+pub(crate) fn module(ruby: &Ruby) -> Result<RModule, Error> {
+    ruby.define_module("ShedMachines")
 }
 
 #[magnus::init]
 fn init(ruby: &Ruby) -> Result<(), Error> {
-    let module = ruby.define_module("ShedMachines")?;
-    module.const_set("NS_PER_SECOND", NS_PER_SECOND)?;
+    let module = module(ruby)?;
     module.const_set("LOWEST_FLOOR", LOWEST_FLOOR)?;
     module.const_set("DEFAULT_CEILING", DEFAULT_CEILING)?;
+    values::define(ruby, module)?;
     aimd::define(ruby, module)?;
     vegas::define(ruby, module)?;
     codel::define(ruby, module)?;

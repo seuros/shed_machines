@@ -1,5 +1,7 @@
 //! TCP Vegas, applied to a concurrency limit instead of a window.
 
+use core::time::Duration;
+
 use crate::{Bounds, Controller, Outcome, Sample};
 
 /// Grow while fewer than this many calls look queued. From the Vegas paper,
@@ -21,6 +23,46 @@ pub const DEFAULT_BASELINE_WINDOW: u32 = 1_000;
 
 /// Calls added or removed per sample.
 const STEP: u32 = 1;
+
+/// The hold band: grow below `alpha` queued calls, shrink above `beta`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Band {
+    alpha: u32,
+    beta: u32,
+}
+
+impl Band {
+    /// `None` unless `alpha <= beta`: a limit told to grow and shrink on the
+    /// same estimate has no answer.
+    #[must_use]
+    pub const fn new(alpha: u32, beta: u32) -> Option<Self> {
+        if alpha > beta {
+            return None;
+        }
+        Some(Self { alpha, beta })
+    }
+
+    /// Grow while fewer than this many calls look queued.
+    #[must_use]
+    pub const fn alpha(&self) -> u32 {
+        self.alpha
+    }
+
+    /// Shrink once more than this many look queued.
+    #[must_use]
+    pub const fn beta(&self) -> u32 {
+        self.beta
+    }
+}
+
+impl Default for Band {
+    fn default() -> Self {
+        Self {
+            alpha: DEFAULT_ALPHA,
+            beta: DEFAULT_BETA,
+        }
+    }
+}
 
 /// Estimates how many calls are queued rather than working, from the gap
 /// between the current round-trip time and the smallest one seen recently, then
@@ -47,133 +89,140 @@ const STEP: u32 = 1;
 /// the floor for good. The baseline is instead the smallest round-trip time in
 /// the current window of [`DEFAULT_BASELINE_WINDOW`] samples or in the one
 /// before it, which keeps it stable while traffic is steady and lets it rise
-/// within two windows when the dependency changes. Set the span with
-/// [`baseline_window`](Self::baseline_window).
+/// within two windows when the dependency changes. The span is the
+/// `baseline_window` given to [`Vegas::new`].
 ///
 /// ```
-/// use shed_machines::{Bounds, Controller, Sample, Vegas};
+/// use core::time::Duration;
+/// use shed_machines::vegas::DEFAULT_BASELINE_WINDOW;
+/// use shed_machines::{Band, Bounds, Controller, Outcome, Sample, Vegas};
 ///
-/// let mut control = Vegas::new(Bounds::new(1, 100), 10);
+/// let bounds = Bounds::new(1, 100).ok_or("bounds")?;
+/// let mut control =
+///     Vegas::new(bounds, 10, Band::default(), DEFAULT_BASELINE_WINDOW).ok_or("config")?;
 ///
 /// // Establishes the baseline, then grows while the queue estimate stays low.
-/// control.observe(Sample::ok(1_000_000, 10));
+/// control.observe(Sample::new(Duration::from_millis(1), 10, Outcome::Ok).ok_or("sample")?);
 /// assert_eq!(control.limit(), 11);
 ///
 /// // Ten times the baseline latency means the queue is deep.
-/// control.observe(Sample::ok(10_000_000, 11));
+/// control.observe(Sample::new(Duration::from_millis(10), 11, Outcome::Ok).ok_or("sample")?);
 /// assert!(control.limit() < 11);
+/// # Ok::<(), &str>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vegas {
     bounds: Bounds,
     limit: u32,
-    /// Smallest round-trip time in the window being filled, and in the one
-    /// before it. [`u64::MAX`] stands for a window with nothing in it.
-    current_ns: u64,
-    previous_ns: u64,
-    /// Samples into the current window, and how many it holds.
-    seen: u32,
+    band: Band,
+    /// Samples one baseline window holds, and how many the current one has.
     window: u32,
-    alpha: u32,
-    beta: u32,
+    seen: u32,
+    /// Smallest round-trip time in the window being filled, and in the one
+    /// before it. `None` stands for a window with nothing in it.
+    current: Option<Duration>,
+    previous: Option<Duration>,
 }
 
 impl Vegas {
+    /// `baseline_window` is how many samples one baseline window spans: a
+    /// shorter window follows a dependency whose idle latency drifts, a longer
+    /// one holds a steadier baseline when traffic is bursty. `None` when
+    /// `limit` is outside `bounds` or `baseline_window` is zero.
     #[must_use]
-    pub const fn new(bounds: Bounds, limit: u32) -> Self {
-        Self {
-            bounds,
-            limit: bounds.clamp(limit),
-            current_ns: u64::MAX,
-            previous_ns: u64::MAX,
-            seen: 0,
-            window: DEFAULT_BASELINE_WINDOW,
-            alpha: DEFAULT_ALPHA,
-            beta: DEFAULT_BETA,
+    pub const fn new(bounds: Bounds, limit: u32, band: Band, baseline_window: u32) -> Option<Self> {
+        if !bounds.contains(limit) || baseline_window == 0 {
+            return None;
         }
+        Some(Self {
+            bounds,
+            limit,
+            band,
+            window: baseline_window,
+            seen: 0,
+            current: None,
+            previous: None,
+        })
     }
 
-    /// Grow below `alpha` queued calls, shrink above `beta`, hold between.
+    /// The bounds the limit moves within.
     #[must_use]
-    pub const fn band(mut self, alpha: u32, beta: u32) -> Self {
-        self.alpha = alpha;
-        self.beta = beta;
-        self
+    pub const fn bounds(&self) -> Bounds {
+        self.bounds
     }
 
-    /// Samples one baseline window spans, at least one. A shorter window
-    /// follows a dependency whose idle latency drifts; a longer one holds a
-    /// steadier baseline when traffic is bursty.
+    /// The hold band.
     #[must_use]
-    pub const fn baseline_window(mut self, samples: u32) -> Self {
-        self.window = samples;
-        self
+    pub const fn band(&self) -> Band {
+        self.band
+    }
+
+    /// Samples one baseline window spans.
+    #[must_use]
+    pub const fn baseline_window(&self) -> u32 {
+        self.window
     }
 
     /// The smallest round-trip time in the last window or two, the stand-in for
-    /// zero queueing.
+    /// zero queueing. `None` until a call has completed without overload.
     #[must_use]
-    pub const fn best_rtt_ns(&self) -> Option<u64> {
-        let baseline = self.baseline();
-        if baseline == u64::MAX {
-            None
-        } else {
-            Some(baseline)
+    pub fn best_rtt(&self) -> Option<Duration> {
+        match (self.current, self.previous) {
+            (Some(current), Some(previous)) => Some(current.min(previous)),
+            (Some(only), None) | (None, Some(only)) => Some(only),
+            (None, None) => None,
         }
     }
 
-    const fn baseline(&self) -> u64 {
-        if self.current_ns < self.previous_ns {
-            self.current_ns
-        } else {
-            self.previous_ns
-        }
-    }
-
-    /// Takes `rtt_ns` into the window being filled, retiring that window once
-    /// it is full so the baseline cannot outlive the traffic it came from.
-    const fn rebase(&mut self, rtt_ns: u64) {
-        if rtt_ns < self.current_ns {
-            self.current_ns = rtt_ns;
-        }
-        self.seen += 1;
+    /// Takes `rtt` into the window being filled, retiring that window once it
+    /// is full so the baseline cannot outlive the traffic it came from.
+    fn rebase(&mut self, rtt: Duration) {
+        self.current = Some(self.current.map_or(rtt, |current| current.min(rtt)));
+        // `seen < window` between calls, so this cannot overflow.
+        self.seen = self.seen.saturating_add(1);
         if self.seen >= self.window {
-            self.previous_ns = self.current_ns;
-            self.current_ns = u64::MAX;
+            self.previous = self.current;
+            self.current = None;
             self.seen = 0;
         }
     }
 
     /// `limit * (rtt - best) / rtt`, the Vegas estimate of how many calls in
-    /// flight are waiting rather than working.
-    fn queued(&self, rtt_ns: u64) -> u64 {
-        let baseline = self.baseline();
-        if rtt_ns == 0 || baseline >= rtt_ns {
+    /// flight are waiting rather than working. Kept wide: it is at most the
+    /// limit, but it is only ever compared, so it never has to be narrowed.
+    fn queued(&self, rtt: Duration) -> u128 {
+        let Some(baseline) = self.best_rtt() else {
+            return 0;
+        };
+        let Some(excess) = rtt.checked_sub(baseline) else {
+            return 0;
+        };
+        // Zero excess covers a zero `rtt`, so the divisor below is not zero.
+        if excess.is_zero() {
             return 0;
         }
-        let excess = rtt_ns - baseline;
-        let scaled = u128::from(self.limit) * u128::from(excess) / u128::from(rtt_ns);
-        u64::try_from(scaled).unwrap_or(u64::MAX)
+        u128::from(self.limit) * excess.as_nanos() / rtt.as_nanos()
     }
 }
 
 impl Controller for Vegas {
     fn observe(&mut self, sample: Sample) {
-        if sample.outcome == Outcome::Overload {
-            self.limit = self.bounds.clamp(self.limit / OVERLOAD_DIVISOR);
-            return;
+        match sample.outcome() {
+            Outcome::Overload => {
+                self.limit = self.bounds.clamp(self.limit / OVERLOAD_DIVISOR);
+            }
+            Outcome::Ok => {
+                self.rebase(sample.rtt());
+                let queued = self.queued(sample.rtt());
+                self.limit = if queued < u128::from(self.band.alpha) {
+                    self.bounds.clamp(self.limit.saturating_add(STEP))
+                } else if queued > u128::from(self.band.beta) {
+                    self.bounds.clamp(self.limit.saturating_sub(STEP))
+                } else {
+                    self.limit
+                };
+            }
         }
-
-        self.rebase(sample.rtt_ns);
-        let queued = self.queued(sample.rtt_ns);
-
-        self.limit = if queued < u64::from(self.alpha) {
-            self.bounds.clamp(self.limit.saturating_add(STEP))
-        } else if queued > u64::from(self.beta) {
-            self.bounds.clamp(self.limit.saturating_sub(STEP))
-        } else {
-            self.limit
-        };
     }
 
     fn limit(&self) -> u32 {

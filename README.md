@@ -28,13 +28,16 @@ Requires **Ruby 4.0+** and a Rust toolchain, or a platform gem.
 ```ruby
 require 'shed_machines'
 
-control = ShedMachines::Vegas.new(limit: 10, min: 1, max: 200)
+include ShedMachines
+MS = 1_000_000                       # time is Integer nanoseconds
 
-control.observe(rtt: 0.004, in_flight: 10, outcome: :ok)
-control.limit                                              # => 11
+control = Vegas.new(Bounds.new(1, 200), 10, Band.default, Vegas::DEFAULT_BASELINE_WINDOW)
 
-control.observe(rtt: 0.040, in_flight: 11, outcome: :ok)
-control.limit                                              # => 10
+control.observe(Sample.new(4 * MS, 10, :ok))
+control.limit                        # => 11
+
+control.observe(Sample.new(40 * MS, 11, :ok))
+control.limit                        # => 10
 ```
 
 The escort advises, it does not fire. Nothing here enforces anything. The
@@ -56,27 +59,28 @@ is `no_std` with zero dependencies and also runs on bare metal. It needs Ruby
 
 ## 🎚️ Moving a Concurrency Limit
 
-`Aimd` grows the limit by one whenever a saturated call succeeds, and keeps
-three quarters of it on any overload. It needs no latency signal.
+`Aimd` grows the limit by one whenever a saturated call succeeds, and keeps a
+`Backoff` fraction of it on any overload (`Backoff.default` is three quarters).
+It needs no latency signal.
 
 ```ruby
-control = ShedMachines::Aimd.new(limit: 10, min: 1, max: 100)
+control = Aimd.new(Bounds.new(1, 100), 10, Backoff.default)
 
-control.observe(rtt: 0.004, in_flight: 10, outcome: :ok)        # saturated: grows
-control.limit                                                   # => 11
+control.observe(Sample.new(4 * MS, 10, :ok))        # saturated: grows
+control.limit                                       # => 11
 
-control.observe(rtt: 0.004, in_flight: 11, outcome: :overload)
-control.limit                                                   # => 8
+control.observe(Sample.new(4 * MS, 11, :overload))
+control.limit                                       # => 8
 ```
 
 `Vegas` infers queue depth from the gap between the current round-trip time and
 the smallest one it has seen recently, because latency alone cannot tell a slow
 dependency from a deep queue. It grows while fewer than `alpha` calls look
-queued, shrinks above `beta`, and holds in between.
+queued, shrinks above `beta`, and holds in between: that is its `Band`.
 
 ```ruby
-control = ShedMachines::Vegas.new(limit: 10, min: 1, max: 200, alpha: 3, beta: 6)
-control.best_rtt     # => nil, until the first completed call
+control = Vegas.new(Bounds.new(1, 200), 10, Band.new(3, 6), 1_000)
+control.best_rtt     # => nil, until a call completes without overload
 ```
 
 That inference only holds when any two calls would take about as long on an idle
@@ -88,18 +92,14 @@ heterogeneous work, since it steers on outcomes rather than latency, or give
 each class of work its own `Vegas`.
 
 The baseline is the smallest round-trip time in the current window of
-`DEFAULT_BASELINE_WINDOW` samples or the one before it, so one unusually fast
-call cannot pin it for the life of the process and a dependency that
-legitimately slows down is believed within two windows.
+`baseline_window` samples or the one before it, so one unusually fast call
+cannot pin it for the life of the process and a dependency that legitimately
+slows down is believed within two windows. `DEFAULT_BASELINE_WINDOW` is 1000;
+`control.baseline_window` reads it back.
 
-```ruby
-control = ShedMachines::Vegas.new(limit: 10).baseline_window(250)
-```
-
-Both take `outcome: :ok` or `outcome: :overload`, where overload means the call
-timed out, was rejected, or otherwise says the dependency is loaded. Anything
-else raises `ArgumentError`. Both clamp a starting limit into `min..max`, which
-default to `LOWEST_FLOOR` and `DEFAULT_CEILING`.
+Both observe a `Sample` whose outcome is `:ok` or `:overload`, where overload
+means the call timed out, was rejected, or otherwise says the dependency is
+loaded. Both raise `RangeError` for a starting limit outside the `Bounds`.
 
 ---
 
@@ -111,13 +111,20 @@ above target for a full interval, so a burst passes through and a standing queue
 does not.
 
 ```ruby
-queue = ShedMachines::Codel.new                 # 5 ms target, 100 ms interval
+queue = Codel.default                   # 5 ms target, 100 ms interval
 
-queue.admit(sojourn: 0.020, now: 0.000)         # => :admit, the burst is tolerated
-queue.admit(sojourn: 0.020, now: 0.150)         # => :shed, it is a standing queue
-queue.shedding?                                 # => true
-queue.admit(sojourn: 0.001, now: 0.200)         # => :admit, and the state clears
+queue.admit(20 * MS, 0)                 # => :admit, the burst is tolerated
+queue.admit(20 * MS, 150 * MS)          # => :shed, it is a standing queue
+queue.shedding?                         # => true
+queue.admit(20 * MS, 149 * MS)          # => :time_regression, nothing changed
+queue.admit(1 * MS, 200 * MS)           # => :admit, and the state clears
 ```
+
+`:shed` is not a refusal. "Should this work, which waited this long, still
+run?" is a well-formed question and `:shed` is the controller's answer: the call
+is honoured, records the instant, counts the shed and schedules the next one,
+because that bookkeeping is the control law itself. The one refusal is
+`:time_regression`, for a `now` before the latest one an honoured call recorded.
 
 Successive sheds come faster, as the inverse square root of how many have
 happened, so the control law converges instead of oscillating.
@@ -131,15 +138,16 @@ it. `Budget` tracks what the client asked for against what was accepted and
 reports what fraction of the next wave to drop.
 
 ```ruby
-budget = ShedMachines::Budget.new               # each accept earns 2 requests
+budget = Budget.new(Budget::DEFAULT_MULTIPLIER)  # each accept earns 2 requests
 
-100.times { budget.requested.accepted }
-budget.shed_probability                         # => 0.0
+100.times { budget.requested; budget.accepted }  # each answers :counted
+budget.shed_probability                          # => 0.0
 
 300.times { budget.requested }
-budget.shed_probability                         # => 0.4987...
+budget.shed_probability                          # => 0.4987...
 
-budget.decay                                    # halves both counts
+budget.decay                                     # halves both counts
+Budget.restored(2.0, budget.requests, budget.accepts) # after a restart
 ```
 
 `shed_probability` is a fraction, not a decision, so nothing here needs a random
@@ -147,12 +155,60 @@ number generator.
 
 ---
 
-## 📐 Seconds In, Nanoseconds Inside
+## 📐 Nanoseconds In, Nanoseconds Out
 
-Every duration crosses this boundary as seconds in a `Float`, and is converted
-once to nanoseconds. The control laws are integer-only on purpose: a limit, a
-queue estimate and a backoff are counts, and counting in floats invites a
-limiter that is 10.999999 calls wide.
+Every instant and span is an `Integer` of nanoseconds, in and out:
+`Sample#rtt`, `Codel.new(target, interval)`, `Codel#admit(sojourn, now)`,
+`Vegas#best_rtt`. Read the clock with
+`Process.clock_gettime(Process::CLOCK_MONOTONIC, :nanosecond)`. A `Float` is a
+`TypeError`, a negative or 64-bit-overflowing `Integer` a `RangeError`. The
+control laws are integer-only on purpose: a limit, a queue estimate and a
+backoff are counts, and counting in floats invites a limiter that is 10.999999
+calls wide.
+
+---
+
+## 📜 The Escort's Rules
+
+- **Values are valid or do not exist.** `Bounds`, `Sample`, `Backoff` and
+  `Band` are `Data` values checked by the core's own constructors when they are
+  built, by the gem or by hand: `Bounds.new(0, 10)`, `Sample.new(5, 0, :ok)`,
+  `Backoff.new(4, 4)` and `Band.new(7, 6)` raise `RangeError`. A wrong type
+  raises `TypeError`. The controllers take them positionally, in the crate's
+  order, with no keyword defaults; `.default` is the crate's `Default`. The
+  value classes are sealed: subclassing one raises `TypeError` and `allocate`
+  is undefined. Sealing stops accidents, not reflection (a named subclass's
+  constant is bound before `inherited` raises, and `Marshal.load` skips
+  `initialize`), so the binding is the authority: every value it reads must be
+  an instance of exactly the gem's class (`TypeError` otherwise, a subclass
+  included) and is rebuilt through the core constructor (`RangeError` for a
+  forged one), before any controller sees it.
+- **No re-entrant change.** No mutating call answers a Ruby object, and no
+  reader holds a controller while it builds its `Data` answer, so a `new`
+  that calls back into the controller makes an ordinary call. The binding
+  never raises `RuntimeError` for one.
+- **A refusal is a Symbol and changes nothing.** `:time_regression` and
+  `:overflow` are the only two. Malformed input raises before the core is
+  asked, so a raised call changed nothing either.
+- **Shedding is an answer.** `:shed` is honoured, and so is `:admit`.
+- **No repeats, no scopes.** Nothing here asks for an effect that can already
+  hold, and nothing issues a handle. A `Budget` survives a restart through
+  `Budget.restored`; the controllers and `Codel` start fresh.
+
+---
+
+## 🧾 Every Answer
+
+| Call | Answers | Records `now` |
+| --- | --- | --- |
+| `Aimd#observe(sample)`, `Vegas#observe(sample)` | `nil`; never refuses | no clock |
+| `Codel#admit(sojourn, now)` | `:admit` for work under target | no: holds whatever the time |
+| `Codel#admit(sojourn, now)` | `:admit` or `:shed` for work at or above target | yes |
+| `Codel#admit(sojourn, now)` | `:time_regression` | no, nothing changed |
+| `Budget#requested`, `Budget#accepted` | `:counted` or `:overflow` (nothing changed) | no clock |
+| `Budget#decay` | `nil`; never refuses | no clock |
+| `Aimd.new`, `Vegas.new`, `Codel.new`, `Budget.new`, `Budget.restored` | the instance, or `RangeError` for a configuration the core rejects | no clock |
+| readers (`limit`, `bounds`, `backoff`, `band`, `baseline_window`, `best_rtt`, `target`, `interval`, `shedding?`, `shed_count`, `multiplier`, `requests`, `accepts`, `shed_probability`) | the value; `best_rtt` is `nil` until a call completes without overload | no clock |
 
 ---
 
@@ -170,9 +226,10 @@ The Ruby constants mirror the crate's, with the same names and values.
 | `Vegas::DEFAULT_BETA`              | 6           |
 | `Vegas::OVERLOAD_DIVISOR`          | 2           |
 | `Vegas::DEFAULT_BASELINE_WINDOW`   | 1000        |
-| `Codel::DEFAULT_TARGET_NS`         | 5_000_000   |
-| `Codel::DEFAULT_INTERVAL_NS`       | 100_000_000 |
+| `Codel::DEFAULT_TARGET`            | 5_000_000   |
+| `Codel::DEFAULT_INTERVAL`          | 100_000_000 |
 | `Budget::DEFAULT_MULTIPLIER`       | 2.0         |
+| `Budget::LOWEST_MULTIPLIER`        | 1.0         |
 
 ---
 
