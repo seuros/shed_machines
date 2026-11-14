@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use magnus::typed_data::Obj;
 use magnus::{Error, RModule, Ruby, Value, function, method, prelude::*};
-use matryona_machines::ruby::{integer, symbol};
+use matryona_machines::ruby::{finite, integer, symbol};
 use shed_machines::budget::{DEFAULT_MULTIPLIER, LOWEST_MULTIPLIER};
 use shed_machines::{Budget, Refusal};
 
@@ -26,17 +26,19 @@ fn counted(ruby: &Ruby, counted: Result<(), Refusal>) -> Value {
 }
 
 impl Wrapper {
-    fn new(ruby: &Ruby, multiplier: f64) -> Result<Self, Error> {
+    fn new(ruby: &Ruby, multiplier: Value) -> Result<Self, Error> {
+        let multiplier = finite(multiplier, "multiplier")?;
         let budget = Budget::new(multiplier).ok_or_else(|| multiplier_rejected(ruby))?;
         Ok(Self(RefCell::new(budget)))
     }
 
     fn restored(
         ruby: &Ruby,
-        multiplier: f64,
+        multiplier: Value,
         requests: Value,
         accepts: Value,
     ) -> Result<Self, Error> {
+        let multiplier = finite(multiplier, "multiplier")?;
         let (requests, accepts) = (integer(requests, "requests")?, integer(accepts, "accepts")?);
         let budget = Budget::restored(multiplier, requests, accepts)
             .ok_or_else(|| multiplier_rejected(ruby))?;

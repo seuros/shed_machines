@@ -40,12 +40,35 @@ module ShedMachines
         assert_raises(RangeError) { Budget.new(bad) }
         assert_raises(RangeError) { Budget.restored(bad, 0, 0) }
       end
+      [Float::NAN, Float::INFINITY, 2**1024].each do |bad|
+        assert_equal 'multiplier must be finite', assert_raises(RangeError) { Budget.new(bad) }.message
+        assert_equal 'multiplier must be finite', assert_raises(RangeError) { Budget.restored(bad, 0, 0) }.message
+      end
       assert_raises(TypeError) { Budget.new('2.0') }
       assert_raises(TypeError) { Budget.restored(2.0, 1.5, 0) }
       assert_raises(RangeError) { Budget.restored(2.0, -1, 0) }
       assert_in_delta 2.0, Budget::DEFAULT_MULTIPLIER, 0.0
       assert_in_delta 1.0, Budget::LOWEST_MULTIPLIER, 0.0
       assert_in_delta 2.0, Budget.default.multiplier, 0.0
+    end
+
+    # The multiplier is exactly a Float or an Integer, read natively: a
+    # Rational or an object answering to_f is refused, and no to_f runs.
+    def test_a_multiplier_is_a_float_or_integer_read_natively
+      to_f = Object.new.tap { |object| def object.to_f = 2.0 }
+      [2r, to_f, nil, '2.0'].each do |bad|
+        error = assert_raises(TypeError) { Budget.new(bad) }
+        assert_equal 'multiplier must be a Float or Integer', error.message
+        error = assert_raises(TypeError) { Budget.restored(bad, 0, 0) }
+        assert_equal 'multiplier must be a Float or Integer', error.message
+      end
+      Integer.alias_method(:__real_to_f, :to_f)
+      Integer.define_method(:to_f) { raise 'Integer#to_f called' }
+      assert_in_delta 3.0, Budget.new(3).multiplier, 0.0
+      assert_in_delta 2.0, Budget.restored(2, 1, 1).multiplier, 0.0
+    ensure
+      Integer.alias_method(:to_f, :__real_to_f)
+      Integer.remove_method(:__real_to_f)
     end
 
     def test_a_frozen_budget_counts_nothing
