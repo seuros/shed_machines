@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.0](https://github.com/seuros/shed_machines/compare/shed_machines/v0.1.3...shed_machines/v0.2.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* Duration controls, one Refusal, sealed validated values, exact-class native boundary
+
+### Features
+
+* Duration controls, one Refusal, sealed validated values, exact-class native boundary ([bfb04ad](https://github.com/seuros/shed_machines/commit/bfb04adb92f16fcaf9fa156f243ddaf8e0417c01))
+
+
+### Bug Fixes
+
+* keep test modules out of the packaged crate ([254cff8](https://github.com/seuros/shed_machines/commit/254cff86e3614d68be67cd1f3b1370cdcaffe096))
+
 ## [0.1.3](https://github.com/seuros/shed_machines/compare/shed_machines/v0.1.2...shed_machines/v0.1.3) (2026-11-01)
 
 
