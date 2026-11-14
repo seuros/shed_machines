@@ -4,22 +4,19 @@ use std::cell::RefCell;
 
 use magnus::typed_data::Obj;
 use magnus::{Error, RModule, Ruby, Value, function, method, prelude::*};
+use matryona_machines::ruby::integer;
 use shed_machines::aimd::{DEFAULT_BACKOFF_KEPT, DEFAULT_BACKOFF_OF};
 use shed_machines::{Aimd, Controller};
 
+use crate::rejected;
 use crate::values::{backoff_from, backoff_value, bounds_from, bounds_value};
-use crate::{Whole, rejected};
 
 #[magnus::wrap(class = "ShedMachines::Aimd", free_immediately, size)]
 struct Wrapper(RefCell<Aimd>);
 
 impl Wrapper {
-    fn new(
-        ruby: &Ruby,
-        bounds: Value,
-        Whole(limit): Whole<u32>,
-        backoff: Value,
-    ) -> Result<Self, Error> {
+    fn new(ruby: &Ruby, bounds: Value, limit: Value, backoff: Value) -> Result<Self, Error> {
+        let limit: u32 = integer(limit, "limit")?;
         let (bounds, backoff) = (bounds_from(ruby, bounds)?, backoff_from(ruby, backoff)?);
         let control = Aimd::new(bounds, limit, backoff)
             .ok_or_else(|| rejected(ruby, "the starting limit must be inside the bounds"))?;

@@ -65,6 +65,8 @@ module ShedMachines
       aimd = control.freeze
 
       assert_raises(FrozenError) { aimd.observe(ok(4 * MS, 10)) }
+      # Frozen is checked before the argument is read.
+      assert_raises(FrozenError) { aimd.observe(:not_a_sample) }
       assert_equal 10, aimd.limit
     end
   end

@@ -13,61 +13,35 @@
 mod aimd;
 mod budget;
 mod codel;
+mod init;
 mod values;
 mod vegas;
 
 use std::cell::RefCell;
-use std::time::Duration;
 
-use magnus::{Error, Integer, RModule, Ruby, Symbol, TryConvert, Value, prelude::*};
-use shed_machines::{Controller, DEFAULT_CEILING, LOWEST_FLOOR, Refusal, Verdict};
-
-/// A whole number of things: a limit, a bound, a call count, a ratio's two
-/// sides.
-///
-/// magnus reads an integer through Ruby's `NUM2*` family, which truncates a
-/// `Float` towards zero instead of refusing it, so an argument that counts
-/// rather than measures is read as one of these and anything but an `Integer`
-/// is a `TypeError`. An `Integer` outside the target width is the `RangeError`
-/// magnus raises for it.
-pub(crate) struct Whole<T>(pub(crate) T);
-
-impl<T: TryConvert> TryConvert for Whole<T> {
-    fn try_convert(value: Value) -> Result<Self, Error> {
-        if Integer::from_value(value).is_none() {
-            let ruby = Ruby::get_with(value);
-            return Err(Error::new(
-                ruby.exception_type_error(),
-                format!(
-                    "no implicit conversion of {} into Integer: {}",
-                    value.class(),
-                    value.inspect()
-                ),
-            ));
-        }
-        T::try_convert(value).map(Self)
-    }
-}
-
-/// An instant or span given as Integer nanoseconds: `TypeError` for anything
-/// but an `Integer`, `RangeError` for a negative one or one past 64 bits.
-pub(crate) struct Nanos(pub(crate) Duration);
-
-impl TryConvert for Nanos {
-    fn try_convert(value: Value) -> Result<Self, Error> {
-        let Whole(nanos) = Whole::<u64>::try_convert(value)?;
-        Ok(Self(Duration::from_nanos(nanos)))
-    }
-}
-
-/// A `Duration` the binding was handed as nanoseconds, back as nanoseconds.
-pub(crate) fn nanos(duration: Duration) -> u64 {
-    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
-}
+use magnus::{Error, RModule, Ruby, Symbol, Value, prelude::*};
+use matryona_machines::ruby::Symbols;
+use shed_machines::{Controller, Refusal, Verdict};
 
 /// `RangeError` for a value the core's constructor answered `None` to.
 pub(crate) fn rejected(ruby: &Ruby, why: &str) -> Error {
     Error::new(ruby.exception_range_error(), why.to_owned())
+}
+
+matryona_machines::symbols! {
+    /// The core's refusals, each the `snake_case` of its variant.
+    Refusals for Refusal as "a refusal" {
+        TimeRegression => "time_regression",
+        Overflow => "overflow",
+    }
+}
+
+matryona_machines::symbols! {
+    /// What `Codel#admit` decides.
+    Verdicts for Verdict as "a verdict" {
+        Admit => "admit",
+        Shed => "shed",
+    }
 }
 
 /// The honoured answer's symbol, or the `snake_case` symbol of the refusal.
@@ -78,10 +52,7 @@ pub(crate) fn answer<T>(
 ) -> Value {
     match answer {
         Ok(value) => honoured(value),
-        Err(refusal) => ruby.to_symbol(match refusal {
-            Refusal::TimeRegression => "time_regression",
-            Refusal::Overflow => "overflow",
-        }),
+        Err(refusal) => Refusals::symbol(ruby, refusal),
     }
     .as_value()
 }
@@ -101,25 +72,10 @@ pub(crate) fn observe<C: Controller>(
 }
 
 pub(crate) fn verdict(ruby: &Ruby, verdict: Verdict) -> Symbol {
-    ruby.to_symbol(match verdict {
-        Verdict::Admit => "admit",
-        Verdict::Shed => "shed",
-    })
+    Verdicts::symbol(ruby, verdict)
 }
 
 /// `ShedMachines`, where the `Data` classes live.
 pub(crate) fn module(ruby: &Ruby) -> Result<RModule, Error> {
     ruby.define_module("ShedMachines")
-}
-
-#[magnus::init]
-fn init(ruby: &Ruby) -> Result<(), Error> {
-    let module = module(ruby)?;
-    module.const_set("LOWEST_FLOOR", LOWEST_FLOOR)?;
-    module.const_set("DEFAULT_CEILING", DEFAULT_CEILING)?;
-    values::define(ruby, module)?;
-    aimd::define(ruby, module)?;
-    vegas::define(ruby, module)?;
-    codel::define(ruby, module)?;
-    budget::define(ruby, module)
 }

@@ -48,6 +48,16 @@ module ShedMachines
       assert_equal 10, aimd.limit
     end
 
+    # A singleton class opened on a genuine value does not change what it is.
+    def test_an_opened_singleton_class_is_still_the_gems_value
+      bounds = Bounds.new(1, 100).tap(&:singleton_class)
+      aimd = Aimd.new(bounds, 10, Backoff.default.tap(&:singleton_class))
+      vegas = Vegas.new(bounds, 10, Band.default.tap(&:singleton_class), 4)
+      aimd.observe(ok(4 * MS, 10).tap(&:singleton_class))
+
+      assert_equal [11, 10], [aimd.limit, vegas.limit]
+    end
+
     def test_a_marshal_edited_value_is_revalidated_into_a_range_error
       forged = Marshal.load(Marshal.dump(Bounds.new(1, 5)).sub("i\x06".b, "i\x00".b))
 
@@ -82,6 +92,24 @@ module ShedMachines
       assert_equal 2, vegas.limit
     end
 
+    # Fields are read from the struct itself: a redefined reader is never
+    # called, so it can neither lie nor re-enter.
+    def test_a_redefined_reader_is_ignored
+      bounds = Bounds.new(1, 100)
+      backoff = Backoff.default
+      band = Band.default
+      sample = ok(4 * MS, 10)
+      readers = { Bounds => %i[min max], Backoff => %i[kept of], Band => %i[alpha beta],
+                  Sample => %i[rtt in_flight outcome] }
+      redefined(readers) do
+        aimd = Aimd.new(bounds, 10, backoff)
+        aimd.observe(sample)
+        vegas = Vegas.new(bounds, 10, band, 4)
+
+        assert_equal [11, 10], [aimd.limit, vegas.limit]
+      end
+    end
+
     def test_classes_held_by_the_binding_survive_gc_compaction
       aimd = Aimd.new(Bounds.new(1, 100), 10, Backoff.default)
       vegas = Vegas.new(Bounds.new(1, 200), 10, Band.default, Vegas::DEFAULT_BASELINE_WINDOW)
@@ -94,6 +122,24 @@ module ShedMachines
     end
 
     private
+
+    # Runs the block with every listed reader raising if called.
+    def redefined(readers)
+      readers.each do |klass, names|
+        names.each do |name|
+          klass.alias_method(:"__real_#{name}", name)
+          klass.define_method(name) { raise "#{name} reader called" }
+        end
+      end
+      yield
+    ensure
+      readers.each do |klass, names|
+        names.each do |name|
+          klass.alias_method(name, :"__real_#{name}")
+          klass.remove_method(:"__real_#{name}")
+        end
+      end
+    end
 
     # Runs the block with `value.new` calling `side` first.
     def reenter(value, side)

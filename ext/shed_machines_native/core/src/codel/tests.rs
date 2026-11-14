@@ -1,8 +1,8 @@
 use core::time::Duration;
 
 use crate::codel::{DEFAULT_INTERVAL, DEFAULT_TARGET};
-use crate::tests::Dice;
 use crate::{Codel, Refusal, Verdict};
+use matryona_machines::testing::{XorShift64, refuses};
 
 const fn ms(count: u64) -> Duration {
     Duration::from_millis(count)
@@ -77,13 +77,14 @@ fn an_earlier_instant_is_refused_and_changes_nothing() {
     let mut codel = queue();
     assert_eq!(codel.admit(ms(50), ms(10)), Ok(Verdict::Admit));
     assert_eq!(codel.admit(ms(50), ms(110)), Ok(Verdict::Shed));
-    let before = codel;
 
-    assert_eq!(codel.admit(ms(50), ms(109)), Err(Refusal::TimeRegression));
-    assert_eq!(codel, before);
+    refuses(&mut codel, Refusal::TimeRegression, |c| {
+        c.admit(ms(50), ms(109))
+    });
     // An answer under target would have reset the run: refused, it did not.
-    assert_eq!(codel.admit(ms(1), ms(109)), Err(Refusal::TimeRegression));
-    assert_eq!(codel, before);
+    refuses(&mut codel, Refusal::TimeRegression, |c| {
+        c.admit(ms(1), ms(109))
+    });
     assert!(codel.shedding());
 }
 
@@ -141,13 +142,13 @@ impl Model {
 
 #[test]
 fn the_queue_follows_a_reference_model() {
-    let mut dice = Dice(5_150_115_101);
+    let mut dice = XorShift64::new(5_150_115_101);
     for _ in 0..200 {
         let mut codel = queue();
         let mut model = Model::default();
         let mut now: u64 = 0;
         for _ in 0..500 {
-            let roll = dice.roll();
+            let roll = dice.next_u64();
             // Mostly forward, sometimes back, so regressions are exercised.
             now = if roll.is_multiple_of(8) {
                 now.saturating_sub(roll % 30_000_000)
@@ -155,13 +156,10 @@ fn the_queue_follows_a_reference_model() {
                 now + roll % 40_000_000
             };
             let sojourn = (roll >> 20) % 12_000_000;
-            let before = codel;
-
-            let answer = codel.admit(Duration::from_nanos(sojourn), Duration::from_nanos(now));
-
-            assert_eq!(answer, model.admit(u128::from(sojourn), u128::from(now)));
-            if answer.is_err() {
-                assert_eq!(codel, before);
+            let (sojourn_at, now_at) = (Duration::from_nanos(sojourn), Duration::from_nanos(now));
+            match model.admit(u128::from(sojourn), u128::from(now)) {
+                Err(refusal) => refuses(&mut codel, refusal, |c| c.admit(sojourn_at, now_at)),
+                expected => assert_eq!(codel.admit(sojourn_at, now_at), expected),
             }
             assert_eq!(codel.shedding(), model.shedding);
             assert_eq!(codel.shed_count(), model.sheds);

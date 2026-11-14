@@ -21,18 +21,6 @@ fn sample(rtt_ns: u64, in_flight: u32, outcome: Outcome) -> Sample {
     Sample::new(Duration::from_nanos(rtt_ns), in_flight, outcome).expect("a call in flight")
 }
 
-/// xorshift64: enough randomness for a reference-model test, and repeatable.
-pub struct Dice(pub u64);
-
-impl Dice {
-    pub const fn roll(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-}
-
 #[test]
 fn bounds_exist_only_around_a_limit_and_clamp_both_ways() {
     assert_eq!(Bounds::new(0, 10), None);

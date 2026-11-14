@@ -3,14 +3,15 @@
 use std::cell::RefCell;
 
 use magnus::typed_data::Obj;
-use magnus::{Error, RModule, Ruby, Value, function, method, prelude::*};
+use magnus::{Error, Integer, RModule, Ruby, Value, function, method, prelude::*};
+use matryona_machines::ruby::{integer, nanoseconds};
 use shed_machines::vegas::{
     DEFAULT_ALPHA, DEFAULT_BASELINE_WINDOW, DEFAULT_BETA, OVERLOAD_DIVISOR,
 };
 use shed_machines::{Controller, Vegas};
 
+use crate::rejected;
 use crate::values::{band_from, band_value, bounds_from, bounds_value};
-use crate::{Whole, nanos, rejected};
 
 #[magnus::wrap(class = "ShedMachines::Vegas", free_immediately, size)]
 struct Wrapper(RefCell<Vegas>);
@@ -19,10 +20,12 @@ impl Wrapper {
     fn new(
         ruby: &Ruby,
         bounds: Value,
-        Whole(limit): Whole<u32>,
+        limit: Value,
         band: Value,
-        Whole(baseline_window): Whole<u32>,
+        baseline_window: Value,
     ) -> Result<Self, Error> {
+        let limit: u32 = integer(limit, "limit")?;
+        let baseline_window: u32 = integer(baseline_window, "baseline_window")?;
         let (bounds, band) = (bounds_from(ruby, bounds)?, band_from(ruby, band)?);
         let control = Vegas::new(bounds, limit, band, baseline_window).ok_or_else(|| {
             rejected(
@@ -57,14 +60,17 @@ impl Wrapper {
 
     /// The smallest round-trip time in the last window or two, in Integer
     /// nanoseconds; `nil` until a call has completed without overload.
-    fn best_rtt(&self) -> Option<u64> {
-        self.0.borrow().best_rtt().map(nanos)
+    fn best_rtt(ruby: &Ruby, rb_self: &Self) -> Option<Integer> {
+        let best = rb_self.0.borrow().best_rtt();
+        best.map(|rtt| nanoseconds(ruby, rtt))
     }
 
     fn inspect(&self) -> String {
         let best_rtt = self
+            .0
+            .borrow()
             .best_rtt()
-            .map_or_else(|| "nil".to_owned(), |rtt| rtt.to_string());
+            .map_or_else(|| "nil".to_owned(), |rtt| rtt.as_nanos().to_string());
         format!(
             "#<ShedMachines::Vegas limit={} best_rtt={best_rtt}>",
             self.limit()

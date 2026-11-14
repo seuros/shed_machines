@@ -74,6 +74,8 @@ module ShedMachines
       assert_raises(RangeError) { queue.admit(TARGET - 1, -1) }
       assert_predicate queue, :shedding?
       assert_raises(FrozenError) { queue.freeze.admit(TARGET - 1, 2 * INTERVAL) }
+      # Frozen is checked before any argument is read.
+      assert_raises(FrozenError) { queue.admit(1.5, -1) }
       assert_predicate queue, :shedding?
     end
 
