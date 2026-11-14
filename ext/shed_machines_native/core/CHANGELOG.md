@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.0](https://github.com/seuros/shed_machines/compare/shed-machines-v0.3.0...shed-machines-v0.4.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* adopt matryona-machines 0.2: struct-only field reads, symbols! tables, caret rb-sys, missing_docs
+
+### Features
+
+* adopt matryona-machines 0.2: struct-only field reads, symbols! tables, caret rb-sys, missing_docs ([2d89f8f](https://github.com/seuros/shed_machines/commit/2d89f8f6f3214e0ff813e29a3b85b41eb5e1a98b))
+
 ## [0.3.0](https://github.com/seuros/shed_machines/compare/shed-machines-v0.2.1...shed-machines-v0.3.0) (2026-11-14)
 
 
