@@ -7,9 +7,7 @@
 //! rebuilt through the core constructor, which `Marshal.load` skipped.
 
 use magnus::{Error, IntoValue, RModule, Ruby, Symbol, Value, function, prelude::*};
-use matryona_machines::ruby::{
-    Class, Registry, Symbols, duration, exact_fields, integer, nanoseconds,
-};
+use matryona_machines::ruby::{Class, Symbols, duration, exact_fields, integer, nanoseconds};
 use shed_machines::{Backoff, Band, Bounds, Outcome, Sample};
 
 use crate::rejected;
@@ -24,10 +22,9 @@ struct Classes {
     band: Class,
 }
 
-static CLASSES: Registry<Classes> = Registry::new("shed_machines");
-
-fn classes(ruby: &Ruby) -> Result<&'static Classes, Error> {
-    CLASSES.get(ruby)
+matryona_machines::registry! {
+    static CLASSES: Classes = "shed_machines";
+    fn classes;
 }
 
 fn bounds(ruby: &Ruby, min: Value, max: Value) -> Result<Bounds, Error> {

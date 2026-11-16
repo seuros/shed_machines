@@ -201,6 +201,8 @@ impl Vegas {
         if excess.is_zero() {
             return 0;
         }
+        // A Duration holds under 2^94 nanoseconds; times a u32 that is under
+        // 2^126, so the product fits.
         u128::from(self.limit) * excess.as_nanos() / rtt.as_nanos()
     }
 }

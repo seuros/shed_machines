@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(not(test), deny(clippy::indexing_slicing))]
 
 //! Adaptive concurrency limits and load shedding.
 //!

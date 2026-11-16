@@ -33,6 +33,13 @@ module ShedMachines
   # `Refusal::Overflow`: the count is at 2**64 - 1. Nothing changed.
   type overflow = :overflow
 
+  # Private native checks behind the Data values: the fields as the core holds
+  # them, TypeError for a wrong type, RangeError for a value it rejects.
+  private def self.__bounds: (Integer min, Integer max) -> [Integer, Integer]
+  private def self.__sample: (Integer rtt, Integer in_flight, outcome outcome) -> [Integer, Integer, outcome]
+  private def self.__backoff: (Integer kept, Integer of) -> [Integer, Integer]
+  private def self.__band: (Integer alpha, Integer beta) -> [Integer, Integer]
+
   # The core's `Bounds`: 1 <= min <= max, or RangeError.
   class Bounds < Data
     attr_reader min: Integer
@@ -178,11 +185,12 @@ module ShedMachines
     LOWEST_MULTIPLIER: Float
 
     # `multiplier` is how many requests each accepted one entitles the client
-    # to; RangeError unless finite and at least LOWEST_MULTIPLIER.
-    def self.new: (Float multiplier) -> instance
+    # to, a Float or an Integer (TypeError otherwise); RangeError unless
+    # finite and at least LOWEST_MULTIPLIER.
+    def self.new: (Float | Integer multiplier) -> instance
 
     # A budget carrying saved counts, for a restart.
-    def self.restored: (Float multiplier, Integer requests, Integer accepts) -> instance
+    def self.restored: (Float | Integer multiplier, Integer requests, Integer accepts) -> instance
 
     # DEFAULT_MULTIPLIER, nothing counted.
     def self.default: () -> instance

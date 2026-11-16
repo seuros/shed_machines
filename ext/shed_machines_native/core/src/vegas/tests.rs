@@ -1,5 +1,7 @@
 use core::time::Duration;
 
+use matryona_machines::testing::XorShift64;
+
 use crate::tests::{bounds, ok, overload};
 use crate::vegas::DEFAULT_BASELINE_WINDOW;
 use crate::{Band, Controller, Vegas};
@@ -159,4 +161,104 @@ fn a_window_of_one_follows_the_latest_call() {
     control.observe(ok(9_000_000, 11));
 
     assert_eq!(control.best_rtt(), ns(9_000_000));
+}
+
+/// Vegas restated over the whole history: the baseline is the fastest call
+/// in the last completed window of `window` successes and the one filling,
+/// and the queue estimate is `limit × (rtt - baseline) / rtt`, in wide
+/// integers. Overloads halve the limit and never touch the history.
+struct Model {
+    min: u128,
+    max: u128,
+    limit: u128,
+    alpha: u128,
+    beta: u128,
+    window: usize,
+    rtts: [u128; 256],
+    seen: usize,
+}
+
+impl Model {
+    fn baseline(&self) -> Option<u128> {
+        let completed = self.seen / self.window;
+        let start = completed.saturating_sub(1) * self.window;
+        self.rtts.get(start..self.seen)?.iter().copied().min()
+    }
+
+    fn observe(&mut self, overloaded: bool, rtt: u128) {
+        if overloaded {
+            self.limit = (self.limit / 2).clamp(self.min, self.max);
+            return;
+        }
+        self.rtts[self.seen] = rtt;
+        self.seen += 1;
+        let baseline = self.baseline().expect("this call is in the history");
+        let queued = (self.limit * (rtt - baseline))
+            .checked_div(rtt)
+            .unwrap_or(0);
+        let next = if queued < self.alpha {
+            self.limit + 1
+        } else if queued > self.beta {
+            self.limit.saturating_sub(1)
+        } else {
+            self.limit
+        };
+        self.limit = next.clamp(self.min, self.max);
+    }
+}
+
+#[test]
+fn the_limit_follows_a_reference_model() {
+    let mut dice = XorShift64::new(1_994_082_617);
+    for _ in 0..300 {
+        let (min, max) = if dice.next_u64().is_multiple_of(5) {
+            (1, u32::MAX)
+        } else {
+            let min = 1 + u32::try_from(dice.next_u64() % 40).expect("small");
+            (
+                min,
+                min + u32::try_from(dice.next_u64() % 60).expect("small"),
+            )
+        };
+        let limit =
+            min + u32::try_from(dice.next_u64() % (u64::from(max - min) + 1)).expect("in bounds");
+        let alpha = u32::try_from(dice.next_u64() % 8).expect("small");
+        let beta = alpha + u32::try_from(dice.next_u64() % 8).expect("small");
+        let window = 1 + u32::try_from(dice.next_u64() % 12).expect("small");
+        let band = Band::new(alpha, beta).expect("alpha <= beta");
+        let mut control = Vegas::new(bounds(min, max), limit, band, window).expect("a controller");
+        let mut model = Model {
+            min: u128::from(min),
+            max: u128::from(max),
+            limit: u128::from(limit),
+            alpha: u128::from(alpha),
+            beta: u128::from(beta),
+            window: usize::try_from(window).expect("small"),
+            rtts: [0; 256],
+            seen: 0,
+        };
+        for _ in 0..256 {
+            let roll = dice.next_u64();
+            let overloaded = roll.is_multiple_of(7);
+            // A latency that drifts by phase, with zero now and then.
+            let rtt = if roll.is_multiple_of(29) {
+                0
+            } else {
+                1 + (roll >> 8) % (1_000 * (1 + (roll >> 40) % 5))
+            };
+            let in_flight = 1 + u32::try_from((roll >> 16) % 64).expect("small");
+            let sample = if overloaded {
+                overload(rtt, in_flight)
+            } else {
+                ok(rtt, in_flight)
+            };
+            control.observe(sample);
+            model.observe(overloaded, u128::from(rtt));
+            assert_eq!(u128::from(control.limit()), model.limit);
+            assert_eq!(
+                control.best_rtt().map(|rtt| rtt.as_nanos()),
+                model.baseline()
+            );
+        }
+    }
 }

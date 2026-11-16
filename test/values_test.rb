@@ -63,6 +63,15 @@ module ShedMachines
       end
     end
 
+    # The native wrappers have no allocator, and a subclass's `new` would
+    # build the base class anyway: subclassing them raises too.
+    def test_native_wrappers_are_sealed
+      [Aimd, Vegas, Codel, Budget].each do |wrapper|
+        assert_raises(TypeError) { Class.new(wrapper) }
+        assert_raises(TypeError) { wrapper.allocate }
+      end
+    end
+
     def test_the_validation_hooks_are_private
       assert_raises(NoMethodError) { ShedMachines.__bounds(1, 2) }
       assert_raises(NoMethodError) { ShedMachines.__sample(1, 1, :ok) }

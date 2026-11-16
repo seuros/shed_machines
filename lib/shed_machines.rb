@@ -67,4 +67,10 @@ module ShedMachines
     value.singleton_class.undef_method(:allocate)
     value.define_singleton_method(:inherited) { |_| raise TypeError, "#{value} cannot be subclassed" }
   end
+
+  # The native wrappers have no allocator: a subclass's `new` would build the
+  # base class anyway, so subclassing raises too.
+  [Aimd, Vegas, Codel, Budget].each do |wrapper|
+    wrapper.define_singleton_method(:inherited) { |_| raise TypeError, "#{wrapper} cannot be subclassed" }
+  end
 end

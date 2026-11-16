@@ -182,7 +182,9 @@ calls wide.
   `initialize`), so the binding is the authority: every value it reads must be
   an instance of exactly the gem's class (`TypeError` otherwise, a subclass
   included) and is rebuilt through the core constructor (`RangeError` for a
-  forged one), before any controller sees it.
+  forged one), before any controller sees it. The controllers wrap native
+  state with no allocator, and are sealed too: subclassing `Aimd`, `Vegas`,
+  `Codel` or `Budget` raises `TypeError`.
 - **No re-entrant change.** No mutating call answers a Ruby object, and no
   reader holds a controller while it builds its `Data` answer, so a `new`
   that calls back into the controller makes an ordinary call. The binding
