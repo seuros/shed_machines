@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/seuros/shed_machines/compare/shed_machines/v0.5.0...shed_machines/v0.5.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* fix wrapped classes at load so building a value runs no Ruby ([f38d7f4](https://github.com/seuros/shed_machines/commit/f38d7f4c5e00d6c9ce02acf83fb378c7a77bcac5))
+
 ## [0.5.0](https://github.com/seuros/shed_machines/compare/shed_machines/v0.4.1...shed_machines/v0.5.0) (2026-11-16)
 
 
