@@ -23,6 +23,9 @@ pub enum Verdict {
 
 /// Sheds by how long work waited rather than by how much of it there is.
 ///
+/// The next-shed instant saturates at `Duration::MAX` and the shed counter at
+/// `u64::MAX`; neither saturation is a refusal.
+///
 /// # Shedding is a decision, not a refusal
 ///
 /// "Admit this work, which waited this long?" is a well-formed question, and
