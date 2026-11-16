@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/seuros/shed_machines/compare/shed_machines/v0.4.1...shed_machines/v0.5.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* seal Aimd, Vegas, Codel and Budget against subclassing
+
+### Features
+
+* seal Aimd, Vegas, Codel and Budget against subclassing ([e394613](https://github.com/seuros/shed_machines/commit/e394613ee8bb11a8e822895ce834f01c716b61c0))
+
 ## [0.4.1](https://github.com/seuros/shed_machines/compare/shed_machines/v0.4.0...shed_machines/v0.4.1) (2026-11-14)
 
 
