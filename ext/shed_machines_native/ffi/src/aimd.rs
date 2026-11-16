@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use magnus::typed_data::Obj;
 use magnus::{Error, RModule, Ruby, Value, function, method, prelude::*};
-use matryona_machines::ruby::integer;
+use matryona_machines::ruby::{Class, integer};
 use shed_machines::aimd::{DEFAULT_BACKOFF_KEPT, DEFAULT_BACKOFF_OF};
 use shed_machines::{Aimd, Controller};
 
@@ -57,5 +57,5 @@ pub fn define(ruby: &Ruby, module: RModule) -> Result<(), Error> {
     class.define_method("bounds", method!(Wrapper::bounds, 0))?;
     class.define_method("backoff", method!(Wrapper::backoff, 0))?;
     class.define_method("inspect", method!(Wrapper::inspect, 0))?;
-    Ok(())
+    Class::pin_wrapped::<Wrapper>(ruby, class).map(drop)
 }

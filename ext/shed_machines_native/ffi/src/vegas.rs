@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use magnus::typed_data::Obj;
 use magnus::{Error, Integer, RModule, Ruby, Value, function, method, prelude::*};
-use matryona_machines::ruby::{integer, nanoseconds};
+use matryona_machines::ruby::{Class, integer, nanoseconds};
 use shed_machines::vegas::{
     DEFAULT_ALPHA, DEFAULT_BASELINE_WINDOW, DEFAULT_BETA, OVERLOAD_DIVISOR,
 };
@@ -93,5 +93,5 @@ pub fn define(ruby: &Ruby, module: RModule) -> Result<(), Error> {
     class.define_method("baseline_window", method!(Wrapper::baseline_window, 0))?;
     class.define_method("best_rtt", method!(Wrapper::best_rtt, 0))?;
     class.define_method("inspect", method!(Wrapper::inspect, 0))?;
-    Ok(())
+    Class::pin_wrapped::<Wrapper>(ruby, class).map(drop)
 }

@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use magnus::typed_data::Obj;
 use magnus::{Error, Integer, RModule, Ruby, Value, function, method, prelude::*};
-use matryona_machines::ruby::{duration, nanoseconds};
+use matryona_machines::ruby::{Class, duration, nanoseconds};
 use shed_machines::Codel;
 use shed_machines::codel::{DEFAULT_INTERVAL, DEFAULT_TARGET};
 
@@ -75,5 +75,5 @@ pub fn define(ruby: &Ruby, module: RModule) -> Result<(), Error> {
     class.define_method("shedding?", method!(Wrapper::shedding, 0))?;
     class.define_method("shed_count", method!(Wrapper::shed_count, 0))?;
     class.define_method("inspect", method!(Wrapper::inspect, 0))?;
-    Ok(())
+    Class::pin_wrapped::<Wrapper>(ruby, class).map(drop)
 }

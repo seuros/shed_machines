@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use magnus::typed_data::Obj;
 use magnus::{Error, RModule, Ruby, Value, function, method, prelude::*};
-use matryona_machines::ruby::{finite, integer, symbol};
+use matryona_machines::ruby::{Class, finite, integer, symbol};
 use shed_machines::budget::{DEFAULT_MULTIPLIER, LOWEST_MULTIPLIER};
 use shed_machines::{Budget, Refusal};
 
@@ -111,5 +111,5 @@ pub fn define(ruby: &Ruby, module: RModule) -> Result<(), Error> {
     class.define_method("accepts", method!(Wrapper::accepts, 0))?;
     class.define_method("shed_probability", method!(Wrapper::shed_probability, 0))?;
     class.define_method("inspect", method!(Wrapper::inspect, 0))?;
-    Ok(())
+    Class::pin_wrapped::<Wrapper>(ruby, class).map(drop)
 }
