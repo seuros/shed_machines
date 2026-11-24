@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/seuros/shed_machines/compare/shed_machines/v0.5.1...shed_machines/v0.5.2) (2026-11-24)
+
+
+### Features
+
+* add timed retry-budget decay ([5a29294](https://github.com/seuros/shed_machines/commit/5a2929418b70e70fad2048edc443af1f4abb55a2))
+
 ## [0.5.1](https://github.com/seuros/shed_machines/compare/shed_machines/v0.5.0...shed_machines/v0.5.1) (2026-11-16)
 
 
