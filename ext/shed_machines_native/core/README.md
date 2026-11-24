@@ -66,6 +66,9 @@ assert_eq!(queue.admit(ms(1), ms(200)), Ok(Verdict::Admit));
 
 A client that keeps retrying a failing dependency multiplies the load that broke
 it. `Budget` reports what fraction of the next wave to drop locally.
+Use `TimedBudget` to decay counts automatically by whole caller-supplied
+monotonic intervals and suppress shedding below a minimum request sample.
+Queries project the aged counts without advancing the record clock.
 
 ```rust
 use shed_machines::Budget;
@@ -104,7 +107,7 @@ a recorded instant.
 | Variant | When |
 | --- | --- |
 | `TimeRegression` | `Codel::admit` was given a `now` before the latest instant an honoured call recorded. |
-| `Overflow` | `Budget::requested` or `Budget::accepted` found its count at `u64::MAX`. |
+| `Overflow` | Recording a request or acceptance found its count at `u64::MAX` after any timed decay. |
 
 `Controller::observe` and `Budget::decay` never refuse: a `Sample` that exists
 is valid, the limit saturates inside its `Bounds`, and halving cannot fail.

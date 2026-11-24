@@ -1,9 +1,8 @@
 //! Client-side adaptive throttling, so retries cannot amplify an outage.
 
-use crate::Refusal;
+use core::time::Duration;
 
-/// Each [`Budget::decay`] halves both counts.
-const DECAY_DIVISOR: u64 = 2;
+use crate::Refusal;
 
 /// Denominator bias from the formula in Google's SRE book.
 const DENOMINATOR_BIAS: f64 = 1.0;
@@ -88,8 +87,17 @@ impl Budget {
 
     /// Halve both counts. Never refuses.
     pub const fn decay(&mut self) {
-        self.requests /= DECAY_DIVISOR;
-        self.accepts /= DECAY_DIVISOR;
+        self.decay_by(1);
+    }
+
+    const fn decay_by(&mut self, intervals: u32) {
+        if intervals >= u64::BITS {
+            self.requests = 0;
+            self.accepts = 0;
+        } else {
+            self.requests >>= intervals;
+            self.accepts >>= intervals;
+        }
     }
 
     /// Requests each accepted one entitles the client to.
@@ -121,6 +129,118 @@ impl Budget {
             return 0.0;
         }
         excess / (requests + DENOMINATOR_BIAS)
+    }
+}
+
+/// Retry budget with whole-interval decay and a minimum request sample.
+///
+/// Time is monotonic elapsed time from a caller-selected epoch. Only successful
+/// records advance the observed clock; queries project the budget without
+/// changing it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TimedBudget {
+    budget: Budget,
+    interval: Duration,
+    min_requests: u64,
+    boundary: Duration,
+    observed: Duration,
+}
+
+impl TimedBudget {
+    /// Start a decay interval at `now` with the supplied budget. `None` for
+    /// a zero interval. A `min_requests` of zero disables the sample floor.
+    #[must_use]
+    pub const fn new(
+        budget: Budget,
+        now: Duration,
+        interval: Duration,
+        min_requests: u64,
+    ) -> Option<Self> {
+        if interval.is_zero() {
+            return None;
+        }
+        Some(Self {
+            budget,
+            interval,
+            min_requests,
+            boundary: now,
+            observed: now,
+        })
+    }
+
+    /// Decay if due, then count a request sent.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::TimeRegression`] before the last recorded instant, or
+    /// [`Refusal::Overflow`] if the aged request count cannot take one more.
+    pub fn requested(&mut self, now: Duration) -> Result<(), Refusal> {
+        self.record(now, Budget::requested)
+    }
+
+    /// Decay if due, then count a request accepted.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::TimeRegression`] before the last recorded instant, or
+    /// [`Refusal::Overflow`] if the aged accept count cannot take one more.
+    pub fn accepted(&mut self, now: Duration) -> Result<(), Refusal> {
+        self.record(now, Budget::accepted)
+    }
+
+    /// The aged counts and multiplier at `now`, without changing this budget.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::TimeRegression`] before the last recorded instant.
+    pub fn budget_at(&self, now: Duration) -> Result<Budget, Refusal> {
+        self.aged(now).map(|(budget, _)| budget)
+    }
+
+    /// The aged fraction of outbound work to drop, or zero below the sample floor.
+    ///
+    /// # Errors
+    ///
+    /// [`Refusal::TimeRegression`] before the last recorded instant.
+    pub fn shed_probability(&self, now: Duration) -> Result<f64, Refusal> {
+        let budget = self.budget_at(now)?;
+        Ok(if budget.requests() < self.min_requests {
+            0.0
+        } else {
+            budget.shed_probability()
+        })
+    }
+
+    fn record(
+        &mut self,
+        now: Duration,
+        add: impl FnOnce(&mut Budget) -> Result<(), Refusal>,
+    ) -> Result<(), Refusal> {
+        let (mut budget, boundary) = self.aged(now)?;
+        add(&mut budget)?;
+        self.budget = budget;
+        self.boundary = boundary;
+        self.observed = now;
+        Ok(())
+    }
+
+    fn aged(&self, now: Duration) -> Result<(Budget, Duration), Refusal> {
+        if now < self.observed {
+            return Err(Refusal::TimeRegression);
+        }
+
+        let elapsed = now.saturating_sub(self.boundary).as_nanos();
+        let interval = self.interval.as_nanos();
+        if elapsed < interval {
+            return Ok((self.budget, self.boundary));
+        }
+        let mut budget = self.budget;
+        budget.decay_by(u32::try_from(elapsed / interval).unwrap_or(u32::MAX));
+        let remainder = elapsed % interval;
+        // The remainder is no larger than `elapsed`, itself a Duration.
+        let seconds = u64::try_from(remainder / 1_000_000_000).unwrap_or(u64::MAX);
+        let nanos = u32::try_from(remainder % 1_000_000_000).unwrap_or_default();
+        Ok((budget, now.saturating_sub(Duration::new(seconds, nanos))))
     }
 }
 

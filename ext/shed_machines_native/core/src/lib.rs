@@ -32,7 +32,7 @@ pub mod codel;
 pub mod vegas;
 
 pub use aimd::{Aimd, Backoff};
-pub use budget::Budget;
+pub use budget::{Budget, TimedBudget};
 pub use codel::{Codel, Verdict};
 pub use vegas::{Band, Vegas};
 

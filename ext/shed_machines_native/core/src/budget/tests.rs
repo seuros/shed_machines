@@ -1,4 +1,6 @@
-use crate::{Budget, Refusal};
+use core::{assert_matches, time::Duration};
+
+use crate::{Budget, Refusal, TimedBudget};
 use matryona_machines::testing::{XorShift64, refuses};
 
 #[test]
@@ -50,6 +52,42 @@ fn decay_lets_the_budget_forgive_a_past_outage() {
 
     assert_eq!(budget.requests(), 0);
     assert!((budget.shed_probability() - 0.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn timed_decay_preserves_the_interval_remainder() {
+    let at = Duration::from_secs;
+    let mut budget = TimedBudget::new(restored(8, 4), at(3), at(10), 0).expect("valid interval");
+    assert_eq!(budget.budget_at(at(12)), Ok(restored(8, 4)));
+    assert_eq!(budget.budget_at(at(13)), Ok(restored(4, 2)));
+    assert_eq!(budget.requested(at(16)), Ok(()));
+    assert_eq!(budget.budget_at(at(22)), Ok(restored(5, 2)));
+    assert_eq!(budget.budget_at(at(23)), Ok(restored(2, 1)));
+}
+
+#[test]
+fn long_idle_clears_old_counts_without_erasing_the_new_sample() {
+    let at = Duration::from_secs;
+    let mut budget =
+        TimedBudget::new(restored(u64::MAX, 0), at(0), at(1), 2).expect("valid interval");
+    assert_eq!(budget.requested(at(100_000)), Ok(()));
+    assert_eq!(budget.budget_at(at(100_000)), Ok(restored(1, 0)));
+    assert_matches!(budget.shed_probability(at(100_000)), Ok(p) if p < f64::EPSILON);
+    assert_eq!(budget.requested(at(100_000)), Ok(()));
+    assert_matches!(budget.shed_probability(at(100_000)), Ok(p) if p > 0.5);
+    assert_eq!(budget.budget_at(at(100_001)), Ok(restored(1, 0)));
+}
+
+#[test]
+fn timed_refusals_and_queries_do_not_advance_the_clock() {
+    let at = Duration::from_secs;
+    assert_eq!(TimedBudget::new(Budget::default(), at(0), at(0), 0), None);
+    let mut budget =
+        TimedBudget::new(restored(u64::MAX, 0), at(2), at(10), 0).expect("valid interval");
+    refuses(&mut budget, Refusal::Overflow, |b| b.requested(at(8)));
+    refuses(&mut budget, Refusal::TimeRegression, |b| b.accepted(at(1)));
+    assert_eq!(budget.budget_at(at(100)), Ok(restored(u64::MAX >> 9, 0)));
+    assert_eq!(budget.accepted(at(3)), Ok(()));
 }
 
 #[test]
